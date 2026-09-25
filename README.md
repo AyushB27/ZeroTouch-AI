@@ -1,20 +1,30 @@
-# ZeroTouch AI Prototype
+# ZeroTouch AI: Zero-Ticket Proactive Resolution
 
-ZeroTouch is an autonomous payment resolution prototype that demonstrates how AI can investigate and resolve failed or anomalous payments without manual human intervention or support tickets.
+**The Pitch:** Customer support for consumer payments shouldn't be about closing tickets faster—it should be about *tickets avoided*. Transaction-failure volume (e.g., money debited, merchant not credited) is a massive support driver for platforms like Paytm. 
 
-## The Core Concept
+ZeroTouch is an autonomous AI teammate that proactively investigates and resolves these failures before the customer even needs to reach out.
 
-When a payment goes wrong, the ZeroTouch platform follows a structured, autonomous workflow:
-1. **Data Ingestion & Reconciliation:** Pulls transaction data across the Bank, Payment Network, Merchant Ledger, and Settlement systems.
-2. **AI Investigation:** An LLM agent (powered by Gemini) reasons over the evidence to generate a coherent investigation narrative. 
-3. **Policy Engine:** A strict, deterministic rules engine decides the outcome based on risk scores, amount thresholds, and system states (never relying on the LLM to authorize financial actions).
-4. **Action & Verification:** Safely executes permitted actions (like an auto-reversal), independently verifies the outcome, and notifies the customer—all automatically. High-risk or highly ambiguous cases are safely escalated to a human.
+## The Mechanics
+
+A "reconciliation watcher" continuously ingests transaction events. When a transaction lands in a failure or ambiguous state, the AI teammate springs into action:
+
+1. **Cross-checks Data:** Gathers evidence across Bank, Network (NPCI), Merchant, and Settlement ledgers (mocked as distinct APIs/datasets for this prototype).
+2. **AI Investigation:** An LLM agent (powered by Gemini) reasons over the evidence to classify the transaction and generate a clear investigation narrative.
+3. **Classifies & Acts:** 
+   - **Clear-cut (Auto-Resolve):** Auto-initiates a refund, proactively messages the user with status + ETA, and closes the loop. **No ticket ever created.**
+   - **Ambiguous (Human Escalation):** Creates a ticket that is *already pre-investigated*, with all logs attached and a draft resolution suggested, making human escalation vastly faster.
+
+The escalation logic is the centerpiece of this demo: showing the AI teammate correctly separating "auto-resolve" from "needs human" cases live.
+
+*(Note for Hackathon Judges: To keep this prototype self-contained, the reconciliation data is mocked. In a production environment, this data would be ingested via bank webhooks and NPCI settlement files.)*
+
+---
 
 ## Test Scenarios
 
 The prototype mocks three specific scenarios to demonstrate the platform's decision-making capabilities:
-* **TX9281 (Auto Resolution):** A low-risk payment where the customer was debited but the merchant was not credited. The system safely executes an autonomous reversal.
-* **TX9342 (Human Escalation):** A high-risk, high-value transaction with conflicting network states. The system safely halts and escalates to a human agent, providing the investigation narrative as context.
+* **TX9281 (Clear-cut Auto-Reversal):** A low-risk payment where the customer was debited but the merchant was not credited. The system safely executes an autonomous reversal.
+* **TX9342 (Ambiguous Escalation):** A high-risk, high-value transaction with conflicting network states. The system safely halts and escalates to a human agent, providing the investigation narrative as context.
 * **TX9410 (No Action):** A successfully settled and consistent transaction across all 4 ledgers. No action is taken.
 
 ---
