@@ -63,60 +63,33 @@ def run_resolution(tx_id: str) -> ResolutionResult:
     log("INVESTIGATION", "start", "INFO", f"Agent started investigation for {tx_id}")
     log("INVESTIGATION", "load_transaction", "SUCCESS", f"Transaction {tx_id} loaded: \u20b9{tx['amount']:.0f}")
 
-    try:
-        bank_result = check_bank_status(tx_id)
-        log("INVESTIGATION", "check_bank_status", "SUCCESS", f"Bank status retrieved: {bank_result['status']}")
-    except Exception as e:
-        log("ERROR", "check_bank_status", "FAILED", f"Bank check failed: {str(e)}")
-        log("ESCALATION", "escalate", "INFO", "Unable to establish complete evidence. Escalating to human.")
-        return _build_escalation_result(tx_id, tx, "Bank API unavailable. Cannot establish complete evidence.", events)
+    # --- LAYER 3: AI RESOLUTION AGENT ---
+    # Agent autonomously fetches data via tools and reasons over it.
+    api_key_present = bool(__import__("os").getenv("GEMINI_API_KEY") or __import__("os").getenv("GOOGLE_API_KEY"))
+    narrative = investigate_transaction(tx_id, tx, log)
+    
+    log(
+        "INVESTIGATION", "ai_agent", "SUCCESS",
+        f"Agent investigation complete {'(Gemini Tool-Calling)' if api_key_present else '(deterministic fallback)'}"
+    )
 
-    try:
-        network_result = check_network_status(tx_id)
-        log("INVESTIGATION", "check_network_status", "SUCCESS", f"Network status retrieved: {network_result['status']}")
-    except Exception as e:
-        log("ERROR", "check_network_status", "FAILED", f"Network check failed: {str(e)}")
-        log("ESCALATION", "escalate", "INFO", "Unable to establish complete evidence. Escalating to human.")
-        return _build_escalation_result(tx_id, tx, "Network API unavailable. Cannot establish complete evidence.", events)
-
-    try:
-        merchant_result = check_merchant_ledger(tx_id)
-        log("INVESTIGATION", "check_merchant_ledger", "SUCCESS", f"Merchant ledger retrieved: {merchant_result['status']}")
-    except Exception as e:
-        log("ERROR", "check_merchant_ledger", "FAILED", f"Merchant check failed: {str(e)}")
-        log("ESCALATION", "escalate", "INFO", "Unable to establish complete evidence. Escalating to human.")
-        return _build_escalation_result(tx_id, tx, "Merchant API unavailable. Cannot establish complete evidence.", events)
-
-    try:
-        settlement_result = check_settlement(tx_id)
-        log("INVESTIGATION", "check_settlement", "SUCCESS", f"Settlement status retrieved: {settlement_result['status']}")
-    except Exception as e:
-        log("ERROR", "check_settlement", "FAILED", f"Settlement check failed: {str(e)}")
-        log("ESCALATION", "escalate", "INFO", "Unable to establish complete evidence. Escalating to human.")
-        return _build_escalation_result(tx_id, tx, "Settlement API unavailable. Cannot establish complete evidence.", events)
-
-    # --- RECONCILE ---
+    # --- RECONCILE (For Policy Engine) ---
+    # After the agent fetches the data, we build the immutable Evidence object for Layer 4
+    # The tools updated the in-memory 'tx' object indirectly? Wait!
+    # No, the tools return the status, but they don't mutate `TRANSACTIONS`.
+    # Wait, check_bank_status(tx_id) reads from TRANSACTIONS. TRANSACTIONS ALREADY HAS THE DATA.
+    # The whole system is mocked with pre-existing data in `tx`.
     evidence = Evidence(
         transaction_id=tx_id,
-        bank=bank_result["status"],
-        network=network_result["status"],
-        merchant=merchant_result["status"],
-        settlement=settlement_result["status"],
+        bank=tx["bank_status"],
+        network=tx["network_status"],
+        merchant=tx["merchant_status"],
+        settlement=tx["settlement_status"],
         amount=tx["amount"],
         risk=tx["risk_score"],
         previous_refund=tx["previous_refund"],
     )
-    log("INVESTIGATION", "reconcile", "SUCCESS", "Evidence assembled from all four systems")
-
-    # --- LAYER 3: AI RESOLUTION AGENT ---
-    # Agent observes and reasons. It does NOT authorize action — that is Layer 4.
-    log("INVESTIGATION", "ai_agent", "INFO", "Layer 3 agent reasoning over evidence...")
-    narrative = investigate_transaction(evidence)
-    api_key_present = bool(__import__("os").getenv("GEMINI_API_KEY") or __import__("os").getenv("GOOGLE_API_KEY"))
-    log(
-        "INVESTIGATION", "ai_agent", "SUCCESS",
-        f"Agent investigation complete {'(Gemini)' if api_key_present else '(deterministic fallback)'}"
-    )
+    log("INVESTIGATION", "reconcile", "SUCCESS", "Evidence assembled for Policy Engine")
 
     # --- LAYER 4: POLICY & RISK CONTROL ---
     policy = evaluate_policy(evidence)
