@@ -1,6 +1,6 @@
-# ZeroTouch AI: Zero-Ticket Proactive Resolution
+# ZeroTouch AI: Proactive Payment Resolution
 
-**The Pitch:** Customer support for consumer payments shouldn't be about closing tickets faster—it should be about *tickets avoided*. Transaction-failure volume (e.g., money debited, merchant not credited) is a massive support driver for platforms like Paytm. 
+Customer support for consumer payments shouldn't be about closing tickets faster—it should be about *tickets avoided*. Transaction-failure volume (e.g., money debited, merchant not credited) is a massive support driver for large-scale platforms. 
 
 ZeroTouch is an autonomous AI teammate that proactively investigates and resolves these failures before the customer even needs to reach out.
 
@@ -14,9 +14,7 @@ A "reconciliation watcher" continuously ingests transaction events. When a trans
    - **Clear-cut (Auto-Resolve):** Auto-initiates a refund, proactively messages the user with status + ETA, and closes the loop. **No ticket ever created.**
    - **Ambiguous (Human Escalation):** Creates a ticket that is *already pre-investigated*, with all logs attached and a draft resolution suggested, making human escalation vastly faster.
 
-The escalation logic is the centerpiece of this demo: showing the AI teammate correctly separating "auto-resolve" from "needs human" cases live.
-
-*(Note for Hackathon Judges: To keep this prototype self-contained, the reconciliation data is mocked. In a production environment, this data would be ingested via bank webhooks and NPCI settlement files.)*
+The robust policy logic is the centerpiece of the system, ensuring that autonomous financial actions are completely separated from the AI's reasoning, safely filtering "auto-resolve" from "needs human" cases.
 
 ---
 
