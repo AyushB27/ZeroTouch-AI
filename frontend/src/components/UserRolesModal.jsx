@@ -6,19 +6,19 @@ export default function UserRolesModal({ open, onClose }) {
 
   const roles = [
     {
-      title: 'Paytm Consumer (End User)',
+      title: 'Customer',
       icon: Smartphone,
       color: 'text-paytm-primary',
       bg: 'bg-paytm-primary/10',
       border: 'border-paytm-primary/20',
-      badge: 'Zero Direct Interaction',
+      badge: 'Customer Portal',
       badgeColor: 'bg-slate-100 text-slate-700',
-      desc: 'Normal users paying via Paytm UPI, Wallet, or QR codes.',
+      desc: 'Customers can sign in to ZeroTouch, review their transactions, and open a support conversation.',
       howItWorks: [
-        'Experiences payment failure or delay in the Paytm Consumer App.',
-        'Never opens or logs into ZeroTouch — it is invisible to them.',
-        'Receives proactive in-app push notifications and SMS once ZeroTouch executes auto-reversal.',
-        'No manual support ticket or 48-hour wait required.'
+        'Signs in to the customer portal and describes a payment issue in their own words.',
+        'Follows transaction checks and policy decisions in the investigation activity panel.',
+        'Can track cases and review recorded actions and outcomes.',
+        'Gets a clear handoff to support whenever policy blocks autonomous action.'
       ]
     },
     {

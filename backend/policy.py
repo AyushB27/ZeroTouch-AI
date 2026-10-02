@@ -1,6 +1,5 @@
 """
-Sub-Agent 3: Policy & Compliance Agent
-Deterministic policy engine augmented by RAG retrieval and dynamic CIBIL ceilings.
+Extended policy engine — covers W1, W2, and W3 scenarios.
 The LLM never makes financial decisions. All branching is rule-based.
 """
 from backend.models import Evidence, PolicyDecision
@@ -8,28 +7,6 @@ from backend.models import Evidence, PolicyDecision
 
 def evaluate_policy(evidence: Evidence) -> PolicyDecision:
     tx = evidence
-
-    # Determine dynamic autonomous ceiling based on CIBIL and First-Time User status
-    if tx.cibil_score >= 750:
-        cibil_limit = 10000.0
-        tier_note = f"Prime credit rating (CIBIL {tx.cibil_score}) qualifies for elevated ₹10,000 threshold."
-    elif tx.cibil_score >= 650:
-        cibil_limit = 5000.0
-        tier_note = f"Standard credit standing (CIBIL {tx.cibil_score}) capped at ₹5,000 threshold."
-    else:
-        cibil_limit = 1500.0
-        tier_note = f"Subprime credit rating (CIBIL {tx.cibil_score}) restricted to ₹1,500 threshold."
-
-    # First-Time User High-Risk Filter
-    if tx.is_first_time_user and tx.amount > 5000.0 and tx.cibil_score < 650:
-        return PolicyDecision(
-            decision="HUMAN_ESCALATION",
-            authorized=False,
-            reason=(
-                f"High-value payment (₹{tx.amount:,.0f}) by First-Time User with subprime CIBIL ({tx.cibil_score}). "
-                "Autonomous action prohibited. Mandatory human desk investigation required."
-            ),
-        )
 
     # ── W1: Consistent transaction ────────────────────────────────────────────
     if (
@@ -44,23 +21,23 @@ def evaluate_policy(evidence: Evidence) -> PolicyDecision:
             reason="Transaction is consistent across all systems. No anomaly detected.",
         )
 
-    # ── W1: Clean auto-reversal (with CIBIL ceiling) ───────────────────────────
+    # ── W1: Clean auto-reversal ───────────────────────────────────────────────
     if (
         tx.bank == "DEBITED"
         and tx.network == "SUCCESS"
         and tx.merchant == "NOT_CREDITED"
         and tx.settlement == "NOT_FOUND"
-        and tx.amount <= cibil_limit
+        and tx.amount <= 5000
         and tx.risk < 0.30
         and not tx.previous_refund
     ):
-        ft_note = " First-Time User onboarding safety applied." if tx.is_first_time_user else ""
         return PolicyDecision(
             decision="AUTO_REVERSAL",
             authorized=True,
             reason=(
-                f"Bank debit confirmed. Network success but merchant not credited and settlement absent. "
-                f"Amount ₹{tx.amount:,.0f} within credit ceiling (₹{cibil_limit:,.0f}). {tier_note}{ft_note}"
+                "Bank debit confirmed. Network success but merchant not credited and "
+                "settlement absent. Amount within autonomous action limit. Risk score "
+                f"{tx.risk:.2f} below threshold. No prior refund on record."
             ),
         )
 
@@ -76,7 +53,7 @@ def evaluate_policy(evidence: Evidence) -> PolicyDecision:
             authorized=True,
             reason=(
                 "Refund was acknowledged by the bank but has not credited to the customer "
-                "within standard SLA window. Autonomous bank escalation API triggered per Rule 2.2."
+                "within the 5-day SLA window. Autonomous bank escalation API triggered per Rule 2.2."
             ),
         )
 
@@ -87,13 +64,12 @@ def evaluate_policy(evidence: Evidence) -> PolicyDecision:
         and tx.merchant == "REVERSED"
         and tx.settlement == "FAILED"
     ):
-        ft_note = " Customer is a First-Time User: prioritized instant Paytm Wallet credit to prevent churn." if tx.is_first_time_user else ""
         return PolicyDecision(
             decision="WALLET_CREDIT_OFFER",
             authorized=True,
             reason=(
                 "Refund bounced because the destination bank account or card is invalid. "
-                f"Per Rule 2.3: credit the equivalent amount to the customer's Paytm Wallet.{ft_note}"
+                "Per Rule 2.3: credit the equivalent amount to the customer's Paytm Wallet."
             ),
         )
 
@@ -105,15 +81,18 @@ def evaluate_policy(evidence: Evidence) -> PolicyDecision:
         and tx.settlement.startswith("PARTIAL_SETTLED")
         and tx.risk < 0.10
     ):
+        fee_parts = tx.merchant.split("_")
         try:
-            fee = float(tx.merchant.split("_")[-1])
+            fee = float(fee_parts[2]) if len(fee_parts) > 2 and fee_parts[1] == "DEDUCTION" else 0.0
+            gst = float(fee_parts[4]) if len(fee_parts) > 4 and fee_parts[3] == "GST" else 0.0
         except ValueError:
-            fee = 0.0
+            fee, gst = 0.0, 0.0
+        total_deduction = fee + gst
         return PolicyDecision(
             decision="ITEMIZED_EXPLANATION",
             authorized=True,
             reason=(
-                f"Merchant settlement shortfall of ₹{fee:.0f} is fully explained by "
+                f"Merchant settlement shortfall of Rs.{total_deduction:.0f} is fully explained by "
                 "standard platform fees and GST. Per Rule 3.1: generate itemized breakdown "
                 "and notify merchant. No ticket required."
             ),
@@ -149,13 +128,11 @@ def evaluate_policy(evidence: Evidence) -> PolicyDecision:
     if tx.settlement in ("UNKNOWN",):
         reasons.append("settlement status is unresolved")
     if tx.risk >= 0.30:
-        reasons.append(f"fraud risk score {tx.risk:.2f} exceeds threshold")
-    if tx.amount > cibil_limit and tx.bank == "DEBITED" and tx.merchant == "NOT_CREDITED":
-        reasons.append(f"amount ₹{tx.amount:,.0f} exceeds CIBIL-backed autonomous limit (₹{cibil_limit:,.0f})")
+        reasons.append(f"risk score {tx.risk:.2f} exceeds autonomous action threshold (0.30)")
+    if tx.amount > 5000 and tx.bank == "DEBITED" and tx.merchant == "NOT_CREDITED":
+        reasons.append(f"amount Rs.{tx.amount:.0f} exceeds autonomous action limit (Rs.5,000)")
     if tx.previous_refund and tx.bank == "DEBITED" and tx.merchant == "NOT_CREDITED":
         reasons.append("previous refund already issued for this transaction")
-    if tx.cibil_score < 620:
-        reasons.append(f"customer CIBIL score ({tx.cibil_score}) requires human supervisory sign-off")
 
     reason_str = "Payment state could not be conclusively reconciled. " + (
         "; ".join(reasons).capitalize() + "." if reasons else "Manual review required."

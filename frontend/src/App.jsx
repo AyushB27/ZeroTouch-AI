@@ -4,13 +4,16 @@ import {
   HelpCircle, Bell, Search, ChevronDown, RefreshCw,
   Zap, Eye, AlertTriangle, CheckCircle2, Clock, XCircle,
   X, ShieldAlert, Loader2, User, MoreVertical, Play,
-  Smartphone, Store, Info, SplitSquareVertical, ArrowUpRight
+  Smartphone, Store, Info, SplitSquareVertical, ArrowUpRight, LogOut, ScrollText
 } from 'lucide-react';
 import AgentTrace from './components/AgentTrace';
 import HITLQueue  from './components/HITLQueue';
 import ClientExperienceView from './components/ClientExperienceView';
 import UserRolesModal from './components/UserRolesModal';
-import { getTransactions, runResolution, resetDemo, getEvents } from './api';
+import { getTransactions, runResolution, resetDemo, getEvents, getAdminAuditLogs } from './api';
+import { getCurrentUser, logout } from './api';
+import LoginScreen from './components/LoginScreen';
+import CustomerPortal from './components/CustomerPortal';
 
 // ── constants ─────────────────────────────────────────────────────────────────
 const WF_LABELS = { W1: 'Failed Payment', W2: 'Refund SLA', W3: 'Settlement' };
@@ -31,6 +34,7 @@ const STATUS_META = {
 function Sidebar({ activeNav, onSelectNav, onOpenRolesModal }) {
   const navItems = [
     { id: 'transactions', icon: ArrowLeftRight,  label: 'Exceptions (Ops)' },
+    { id: 'audit_logs',   icon: ScrollText,       label: 'Audit trail' },
     { id: 'client_view',  icon: Smartphone,      label: 'Client Simulator' },
     { id: 'split_view',   icon: SplitSquareVertical, label: 'Split Integration' },
   ];
@@ -45,9 +49,9 @@ function Sidebar({ activeNav, onSelectNav, onOpenRolesModal }) {
           </div>
           <div>
             <div className="text-white font-extrabold text-sm leading-none tracking-tight">
-              pay<span className="text-paytm-primary">tm</span>
+              Zero<span className="text-paytm-primary">Touch</span>
             </div>
-            <div className="text-blue-300 text-[9px] font-semibold leading-none mt-0.5">for Business · Ops</div>
+            <div className="text-blue-300 text-[9px] font-semibold leading-none mt-0.5">AUTONOMOUS SUPPORT</div>
           </div>
         </div>
       </div>
@@ -400,7 +404,7 @@ function TxDetailPanel({ tx, events, result, isRunning, onRun, onClose }) {
 }
 
 // ── Main App ──────────────────────────────────────────────────────────────────
-export default function App() {
+function OperationsConsole({ onLogout }) {
   const [activeNav,    setActiveNav]    = useState('transactions'); // 'transactions' | 'client_view' | 'split_view'
   const [txList,       setTxList]       = useState([]);
   const [selectedTx,   setSelectedTx]   = useState(null);
@@ -414,6 +418,7 @@ export default function App() {
   const [error,        setError]        = useState(null);
   const [backendDown,  setBackendDown]  = useState(false);
   const [searchQ,      setSearchQ]      = useState('');
+  const [auditLogs,    setAuditLogs]     = useState([]);
 
   const loadTx = useCallback(async () => {
     try {
@@ -426,6 +431,9 @@ export default function App() {
   }, []);
 
   useEffect(() => { loadTx(); }, [loadTx]);
+  useEffect(() => {
+    if (activeNav === 'audit_logs') getAdminAuditLogs().then(setAuditLogs).catch(e => setError(e.message));
+  }, [activeNav]);
 
   // keep selectedTx in sync with live txList
   useEffect(() => {
@@ -514,10 +522,11 @@ export default function App() {
           <div>
             <h1 className="font-extrabold text-slate-800 text-base leading-none">
               {activeNav === 'transactions' && 'Transaction Exceptions & Ops'}
+              {activeNav === 'audit_logs'   && 'Audit trail'}
               {activeNav === 'client_view'  && 'Client Surface Simulator (Customer & Merchant)'}
               {activeNav === 'split_view'   && 'Real-Time Integration Split View'}
             </h1>
-            <p className="text-xs text-slate-400 mt-0.5">Paytm Operations · Autonomous AI Resolution Engine</p>
+            <p className="text-xs text-slate-400 mt-0.5">ZeroTouch Command Center · Autonomous AI Resolution Engine</p>
           </div>
 
           {/* Quick Nav Mode Pills */}
@@ -607,10 +616,13 @@ export default function App() {
             </button>
 
             {/* Avatar */}
-            <div className="flex items-center gap-2 cursor-pointer">
+            <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-full bg-paytm-dark flex items-center justify-center">
                 <User size={15} className="text-white"/>
               </div>
+              <button onClick={onLogout} className="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50" aria-label="Sign out">
+                <LogOut size={13}/> Sign out
+              </button>
             </div>
           </div>
         </header>
@@ -632,6 +644,30 @@ export default function App() {
               onView={handleView}
               busyId={busyId}
             />
+          </main>
+        )}
+
+        {activeNav === 'audit_logs' && (
+          <main className="flex-1 overflow-y-auto p-6">
+            <div className="mx-auto max-w-5xl">
+              <div className="mb-5 flex items-end justify-between gap-4">
+                <div><h2 className="text-lg font-extrabold text-slate-800">Investigation audit trail</h2><p className="mt-1 text-xs text-slate-500">Recorded evidence checks, policy decisions, actions, verification and customer updates.</p></div>
+                <span className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-bold text-paytm-dark">{auditLogs.length} events</span>
+              </div>
+              {auditLogs.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-16 text-center"><ScrollText size={28} className="mx-auto text-slate-300"/><p className="mt-3 text-sm font-bold text-slate-700">No audit events yet</p><p className="mt-1 text-xs text-slate-500">Run an investigation to see its recorded timeline here.</p></div>
+              ) : (
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  {auditLogs.map((event, index) => (
+                    <div key={`${event.transaction_id}-${event.timestamp}-${index}`} className="grid grid-cols-[118px_1fr] gap-4 border-b border-slate-100 px-4 py-4 last:border-0 sm:grid-cols-[150px_104px_1fr] sm:px-5">
+                      <time className="text-[11px] font-medium text-slate-400">{new Date(event.timestamp).toLocaleString()}</time>
+                      <div className="hidden sm:block"><span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-600">{event.transaction_id}</span></div>
+                      <div><div className="flex flex-wrap items-center gap-2"><span className="text-xs font-bold capitalize text-slate-800">{event.step.replaceAll('_', ' ')}</span><span className={`rounded px-1.5 py-0.5 text-[9px] font-extrabold ${event.status === 'FAILED' ? 'bg-rose-50 text-rose-700' : event.status === 'INFO' ? 'bg-blue-50 text-blue-700' : 'bg-emerald-50 text-emerald-700'}`}>{event.status}</span><span className="text-[10px] text-slate-400 sm:hidden">{event.transaction_id}</span></div><p className="mt-1 text-xs leading-5 text-slate-500">{event.message}</p></div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </main>
         )}
 
@@ -717,4 +753,22 @@ export default function App() {
 
     </div>
   );
+}
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  useEffect(() => {
+    if (!localStorage.getItem('zerotouch_token')) { setCheckingSession(false); return; }
+    getCurrentUser().then(setUser).catch(() => logout()).finally(() => setCheckingSession(false));
+  }, []);
+
+  const handleLogin = async () => setUser(await getCurrentUser());
+  const handleLogout = () => { logout(); setUser(null); };
+
+  if (checkingSession) return <div className="grid min-h-screen place-items-center bg-[#f4f8fc] text-sm font-semibold text-slate-500">Loading ZeroTouch…</div>;
+  if (!user) return <LoginScreen onLogin={handleLogin}/>;
+  if (user.role === 'CUSTOMER') return <CustomerPortal user={user} onLogout={handleLogout}/>;
+  return <OperationsConsole onLogout={handleLogout}/>;
 }

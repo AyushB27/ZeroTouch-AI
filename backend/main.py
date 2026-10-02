@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, Header
+from fastapi import FastAPI, HTTPException, Request, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
@@ -6,6 +6,8 @@ import json
 import hashlib
 import hmac
 import os
+import re
+import secrets
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -13,12 +15,45 @@ load_dotenv()
 from backend.database import (
     init_db, db_get_transaction, db_get_all_transactions,
     db_get_events, db_reset_all, db_log_webhook, db_mark_webhook_processed,
-    db_update_transaction,
+    db_update_transaction, db_add_message, db_get_messages,
 )
 from backend.orchestrator import run_resolution
 from backend.rag import init_rag
 
 app = FastAPI(title="ZeroTouch Payment Resolution Engine", version="2.0.0")
+
+# Hackathon demo identities. Tokens are issued and role-bound on the server;
+# clients cannot elevate privileges by changing a role field.
+DEMO_USERS = {
+    "vansh@zerotouch.demo": {"password": "demo123", "role": "CUSTOMER", "name": "Vansh", "id": "cust-vansh"},
+    "support@zerotouch.demo": {"password": "demo123", "role": "ADMIN", "name": "Support Agent", "id": "admin-support"},
+}
+SESSIONS: dict[str, dict] = {}
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+def current_user(authorization: Optional[str] = Header(None)):
+    token = authorization.removeprefix("Bearer ") if authorization else ""
+    user = SESSIONS.get(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Please sign in to continue")
+    return user
+
+
+def require_customer(user=Depends(current_user)):
+    if user["role"] != "CUSTOMER":
+        raise HTTPException(status_code=403, detail="Customer access required")
+    return user
+
+
+def require_admin(user=Depends(current_user)):
+    if user["role"] != "ADMIN":
+        raise HTTPException(status_code=403, detail="Support access required")
+    return user
 
 app.add_middleware(
     CORSMiddleware,
@@ -48,15 +83,37 @@ def health():
     }
 
 
+@app.post("/api/auth/login")
+def login(credentials: LoginRequest):
+    account = DEMO_USERS.get(credentials.email.strip().lower())
+    if not account or not secrets.compare_digest(credentials.password, account["password"]):
+        raise HTTPException(status_code=401, detail="Email or password is incorrect")
+    token = secrets.token_urlsafe(32)
+    SESSIONS[token] = {key: account[key] for key in ("role", "name", "id")}
+    return {"token": token, "user": SESSIONS[token]}
+
+
+@app.get("/api/auth/me")
+def who_am_i(user=Depends(current_user)):
+    return user
+
+
+@app.post("/api/auth/logout")
+def logout(authorization: Optional[str] = Header(None)):
+    token = authorization.removeprefix("Bearer ") if authorization else ""
+    SESSIONS.pop(token, None)
+    return {"status": "ok"}
+
+
 # ── Transactions ──────────────────────────────────────────────────────────────
 
 @app.get("/api/transactions")
-def get_transactions():
+def get_transactions(_user=Depends(require_admin)):
     return db_get_all_transactions()
 
 
 @app.get("/api/transactions/{tx_id}")
-def get_transaction(tx_id: str):
+def get_transaction(tx_id: str, _user=Depends(require_admin)):
     tx = db_get_transaction(tx_id)
     if not tx:
         raise HTTPException(status_code=404, detail=f"Transaction {tx_id} not found")
@@ -66,7 +123,7 @@ def get_transaction(tx_id: str):
 # ── Resolution ────────────────────────────────────────────────────────────────
 
 @app.post("/api/resolutions/{tx_id}/run")
-def resolve_transaction(tx_id: str):
+def resolve_transaction(tx_id: str, _user=Depends(require_admin)):
     tx = db_get_transaction(tx_id)
     if not tx:
         raise HTTPException(status_code=404, detail=f"Transaction {tx_id} not found")
@@ -78,7 +135,7 @@ def resolve_transaction(tx_id: str):
 
 
 @app.get("/api/resolutions/{tx_id}/events")
-def get_events(tx_id: str):
+def get_events(tx_id: str, _user=Depends(require_admin)):
     if not db_get_transaction(tx_id):
         raise HTTPException(status_code=404, detail=f"Transaction {tx_id} not found")
     return db_get_events(tx_id)
@@ -92,8 +149,114 @@ class HumanDecision(BaseModel):
     notes: Optional[str] = None
 
 
+class CustomerChatMessage(BaseModel):
+    message: str
+
+
+@app.get("/api/customer/profile")
+def customer_profile(user=Depends(require_customer)):
+    return {"id": user["id"], "name": user["name"], "email": "vansh@zerotouch.demo",
+            "tagline": "Your autonomous payment teammate"}
+
+
+@app.get("/api/customer/transactions")
+def customer_transactions(_user=Depends(require_customer)):
+    # Deliberately return only customer-facing fields, never internal risk scores.
+    return [{key: tx[key] for key in ("transaction_id", "amount", "currency", "bank_status", "resolution_status", "workflow_type", "action_id")}
+            for tx in db_get_all_transactions()]
+
+
+@app.get("/api/customer/cases")
+def customer_cases(_user=Depends(require_customer)):
+    cases = []
+    for tx in db_get_all_transactions():
+        if tx["resolution_status"] == "PENDING":
+            continue
+        cases.append({
+            "case_id": f"ZT-{tx['transaction_id'][-5:]}",
+            "transaction_id": tx["transaction_id"], "amount": tx["amount"],
+            "status": tx["resolution_status"], "issue": _issue_for(tx),
+            "action_id": tx.get("action_id"), "timeline": db_get_events(tx["transaction_id"]),
+        })
+    return cases
+
+
+@app.get("/api/customer/messages")
+def customer_messages(user=Depends(require_customer)):
+    return db_get_messages(user["id"])
+
+
+def _issue_for(tx):
+    return {"W1": "Payment investigation", "W2": "Refund follow-up", "W3": "Merchant settlement review"}.get(tx.get("workflow_type"), "Payment support")
+
+
+@app.post("/api/chat")
+def customer_chat(payload: CustomerChatMessage, user=Depends(require_customer)):
+    message = payload.message.strip()
+    if not message or len(message) > 1000:
+        raise HTTPException(status_code=422, detail="Message must contain 1–1000 characters")
+    transactions = {tx["transaction_id"]: tx for tx in db_get_all_transactions()}
+    explicit = re.search(r"\b(?:TX\d{4}|RF\d{3}|S\d{3})\b", message.upper())
+    if explicit and explicit.group(0) in transactions:
+        tx_id = explicit.group(0)
+    elif re.search(r"9[, ]?650|10[, ]?000", message.lower()) or any(word in message.lower() for word in ("settlement", "short settlement")):
+        tx_id = "S301"
+    elif any(word in message.lower() for word in ("bounced", "invalid account", "wallet")):
+        tx_id = "RF204"
+    elif "refund" in message.lower() and any(word in message.lower() for word in ("late", "missing", "arrived", "where")):
+        tx_id = "RF202"
+    elif any(word in message.lower() for word in ("human", "agent", "support person", "high risk")):
+        tx_id = "TX9342"
+    else:
+        tx_id = "TX9281"
+
+    db_add_message(user["id"], "customer", message, tx_id)
+    tx = transactions[tx_id]
+    if tx["resolution_status"] == "PENDING":
+        result = run_resolution(tx_id)
+        events = [event.model_dump() for event in result.events]
+        decision = result.decision
+        action_id = result.action_id
+        status = result.resolution_status
+        if decision == "AUTO_REVERSAL":
+            reply = f"I investigated {tx_id} across the bank, payment network, merchant ledger and settlement. The bank confirmed your ₹{tx['amount']:,.0f} debit, but the merchant was not credited. The policy engine approved an automatic reversal, and I verified it successfully. Reference: {action_id}."
+        elif status == "ESCALATED":
+            reply = f"I checked {tx_id} and found a high-risk or unresolved payment state. ZeroTouch has paused any automatic money movement and sent the evidence to our support team for human review. Case {result.support_case or f'ZT-{tx_id[-5:]}'} is open."
+        elif decision == "SLA_CHASE":
+            reply = f"I confirmed your refund is past the bank's service window and opened a follow-up with the bank. Reference: {action_id}; expected update within 24 hours."
+        elif decision == "WALLET_CREDIT_OFFER":
+            reply = f"The refund return was rejected because the destination account is invalid. The demo workflow placed ₹{tx['amount']:,.0f} in the wallet resolution flow and recorded reference {action_id}."
+        elif decision == "ITEMIZED_EXPLANATION":
+            if tx_id == "S301":
+                reply = f"I reconciled settlement {tx_id}: ₹10,000 gross, less ₹300 platform fee and ₹50 GST, leaves ₹9,650 net. I've sent the itemized explanation. Reference: {action_id}."
+            else:
+                reply = f"I reconciled settlement {tx_id}. The ₹{tx['amount']:,.0f} gross amount includes a ₹1,000 platform fee, leaving ₹49,000 net. Reference: {action_id}."
+        else:
+            reply = f"I checked {tx_id} across the payment systems. The records are consistent, so no additional action was needed."
+    else:
+        events = db_get_events(tx_id)
+        status = tx["resolution_status"]
+        action_id = tx.get("action_id")
+        if status == "ESCALATED":
+            reply = f"Case ZT-{tx_id[-5:]} is awaiting human review. No automatic refund has been issued."
+        else:
+            reply = f"Case ZT-{tx_id[-5:]} is already {status.lower().replace('_', ' ')}. {('Action reference: ' + action_id + '.') if action_id else 'No further action is required.'}"
+
+    db_add_message(user["id"], "assistant", reply, tx_id)
+    return {
+        "transaction_id": tx_id,
+        "case_id": f"ZT-{tx_id[-5:]}",
+        "status": status,
+        "reply": reply,
+        "events": events,
+        "activity": [{"type": event.get("type"), "step": event.get("step"),
+                      "status": event.get("status"), "message": event.get("message")}
+                     for event in events],
+    }
+
+
 @app.post("/api/resolutions/{tx_id}/human-decision")
-def human_decision(tx_id: str, decision: HumanDecision):
+def human_decision(tx_id: str, decision: HumanDecision, _user=Depends(require_admin)):
     tx = db_get_transaction(tx_id)
     if not tx:
         raise HTTPException(status_code=404, detail=f"Transaction {tx_id} not found")
@@ -114,12 +277,34 @@ def human_decision(tx_id: str, decision: HumanDecision):
 
     new_status, log_msg = action_map[decision.action]
 
-    if decision.action != "REQUEST_MORE_INFO":
+    if decision.action == "APPROVE_REFUND":
+        from backend.tools.actions import initiate_reversal, verify_resolution
+        from backend.tools.notifications import send_customer_notification
+        action = initiate_reversal(tx_id)
+        verification = verify_resolution(tx_id)
+        if not verification["verified"]:
+            raise HTTPException(status_code=409, detail="Approved action could not be verified")
+        db_add_event(tx_id, "ACTION", "human_approved_reversal", "SUCCESS",
+                     f"Human-approved reversal completed: {action['action_id']}")
+        db_add_event(tx_id, "VERIFICATION", "verify_resolution", "SUCCESS",
+                     "Human-approved reversal independently verified")
+        send_customer_notification(tx_id, tx["amount"], action["action_id"])
+        db_add_event(tx_id, "NOTIFICATION", "send_notification", "SUCCESS",
+                     "Customer notified of human-approved reversal")
+    elif decision.action != "REQUEST_MORE_INFO":
         db_update_transaction(tx_id, resolution_status=new_status)
 
     note_text = f" Note: {decision.notes}" if decision.notes else ""
     db_add_event(tx_id, "ESCALATION", "human_decision", "SUCCESS",
                  f"[{decision.agent_name}] {log_msg}{note_text}")
+    customer_updates = {
+        "APPROVE_REFUND": f"A support agent reviewed case ZT-{tx_id[-5:]} and approved your reversal. The action was verified successfully.",
+        "REJECT": f"A support agent reviewed case ZT-{tx_id[-5:]}. No refund was issued; the case is closed without a payment action.",
+        "REQUEST_MORE_INFO": f"A support agent is reviewing case ZT-{tx_id[-5:]} and needs more information before deciding. Please reply here with any details that may help.",
+    }
+    db_add_message("cust-vansh", "assistant", customer_updates[decision.action], tx_id)
+    db_add_event(tx_id, "NOTIFICATION", "update_customer_case", "SUCCESS",
+                 "Customer conversation updated with the human review outcome")
 
     return {
         "status": "ok",
@@ -128,6 +313,31 @@ def human_decision(tx_id: str, decision: HumanDecision):
         "new_status": new_status,
         "agent": decision.agent_name,
     }
+
+
+@app.get("/api/admin/dashboard")
+def admin_dashboard(_user=Depends(require_admin)):
+    rows = db_get_all_transactions()
+    return {
+        "total_cases": len(rows),
+        "autonomous_resolutions": sum(row["resolution_status"] == "RESOLVED" for row in rows),
+        "human_escalations": sum(row["resolution_status"] == "ESCALATED" for row in rows),
+        "active_investigations": sum(row["resolution_status"] == "PENDING" for row in rows),
+        "refunds_processed": sum(bool(row.get("action_id")) and row["workflow_type"] == "W1" for row in rows),
+        "transactions": rows,
+    }
+
+
+@app.get("/api/admin/audit-logs")
+def admin_audit_logs(_user=Depends(require_admin)):
+    logs = [event for tx in db_get_all_transactions() for event in db_get_events(tx["transaction_id"])]
+    return sorted(logs, key=lambda event: event["timestamp"], reverse=True)
+
+
+@app.get("/api/admin/review-queue")
+def admin_review_queue(_user=Depends(require_admin)):
+    return [{**tx, "timeline": db_get_events(tx["transaction_id"])}
+            for tx in db_get_all_transactions() if tx["resolution_status"] == "ESCALATED"]
 
 
 class NPCIWebhookPayload(BaseModel):
@@ -174,10 +384,12 @@ async def npci_webhook(
     """
     body = await request.body()
 
-    # Signature check (skip in dev if header missing)
+    # Missing signatures are allowed only with the built-in demo secret.
     if x_zerotouch_signature:
         if not _verify_signature(body, x_zerotouch_signature):
             raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    elif WEBHOOK_SECRET != "zerotouch-dev-secret":
+        raise HTTPException(status_code=401, detail="Webhook signature required")
 
     try:
         payload = NPCIWebhookPayload(**json.loads(body))
@@ -236,7 +448,7 @@ async def npci_webhook(
 # ── Reset ─────────────────────────────────────────────────────────────────────
 
 @app.post("/api/reset")
-def reset_demo():
+def reset_demo(_user=Depends(require_admin)):
     db_reset_all()
     return {"status": "reset", "message": "All transactions restored to original state"}
 

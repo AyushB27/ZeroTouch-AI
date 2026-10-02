@@ -1,79 +1,105 @@
-# ZeroTouch AI: Proactive Payment Resolution
+# ZeroTouch
 
-![ZeroTouch Architecture Diagram](docs/architecture.png)
+**Your autonomous payment teammate.** From issue to resolution, with an auditable trail and a person involved when policy requires it.
 
-Payment failures in India's UPI ecosystem routinely land in ambiguous states — debited but unconfirmed, pending too long, or reported inconsistently across the bank, payment network, merchant, and settlement ledger. Today, resolving these exceptions requires a customer to notice the problem, raise a complaint, and wait while support staff manually cross-check multiple systems, even when the underlying issue is technically resolvable within seconds.
+Payment exceptions often leave customers waiting while support staff compare bank, network, merchant, and settlement records. ZeroTouch demonstrates how an AI teammate can investigate those records, apply deterministic financial policy, take a permitted simulated action, verify the result, and explain what happened.
 
-**ZeroTouch is an autonomous AI teammate that closes this gap before a support ticket is ever created.**
+> This is a hackathon prototype. All payment records and money movement are fictional simulations; it is not connected to Paytm or a real bank.
 
-Customer support for consumer payments shouldn't be about closing tickets faster—it should be about *tickets avoided*. At India's current UPI volume of 24.51 billion monthly transactions, even a small share of exceptions represents a massive operational burden. ZeroTouch connects investigation, decision, action, and verification into a single autonomous loop, positioning it as a resolution layer that sits on top of existing payment infrastructure rather than replacing it.
+## How it works
 
----
+```mermaid
+flowchart TD
+    C[Customer describes an issue] --> I[Identify demo transaction]
+    I --> T[Check bank, network, merchant and settlement]
+    T --> A[Optional AI narrative and policy RAG]
+    A --> P[Deterministic policy engine]
+    P -->|Authorized| X[Simulated action]
+    X --> V[Independent verification]
+    P -->|Ambiguous or high risk| H[Human review queue]
+    V --> N[Customer response and persisted audit events]
+    H --> D[Support agent decision]
+    D --> N
+    N --> O[Customer case history and operations console]
+```
 
-## The Five-Stage Autonomous Loop
+The LLM can investigate and explain evidence, but it cannot authorize financial actions. The Python policy engine evaluates transaction state, risk, amount, and prior refund status before the workflow can take action.
 
-ZeroTouch follows a strict, five-stage loop (Detect, Investigate, Reason, Act, Verify) to manage payment exceptions autonomously:
+## Features
 
-1. **Detect (Reconciliation Watcher):** Continuously ingests transaction events. When a transaction lands in a failure or ambiguous state, the AI springs into action.
-2. **Investigate (Data Collection):** Gathers evidence across Bank, Network (NPCI), Merchant, and Settlement ledgers.
-3. **Reason (AI Agent):** An LLM agent (powered by Gemini) reasons over the evidence to determine the root cause and generate a clear investigation narrative.
-4. **Act (Policy & Action):** 
-   - **Clear-cut (Auto-Resolve):** If the case is safe and eligible under policy, the system autonomously executes a refund or reversal. **No ticket is ever created.**
-   - **Ambiguous (Human Escalation):** If a case falls outside its authorization (e.g., suspected fraud, high-value outlier), it hands off to a human agent with a complete investigation summary, transaction evidence, and a suggested resolution, replacing a blank ticket with an already-investigated one.
-5. **Verify:** Independently confirms the transaction state post-action and proactively messages the customer with the status.
+- Customer and support demo sign-in with role-bound server sessions.
+- Customer assistant with starter prompts, recent transactions, support cases, and persisted chat history.
+- Existing LangGraph workflow and simulated bank, network, merchant-ledger, and settlement tools.
+- Deterministic policy decisions for automatic reversal, refund SLA chase, bounced refund, settlement explanation, and escalation.
+- Reversal verification, simulated customer notifications, human approval/rejection, and audit events.
+- Support command center with transaction investigations, evidence, agent trace, and human-review queue.
+- Customer data endpoints are separate from support endpoints; support APIs reject customer sessions.
+- Optional Gemini narrative/tool calling and RAG. The core investigation and policy workflow has a deterministic fallback when no API key is configured.
 
-**Security & Control:** The system is built on a policy-and-risk control plane that restricts autonomous action. The AI investigates and reasons, but **only pre-authorized, deterministic rules can approve money movement**, ensuring strict auditability at every step.
+## Technology
 
----
+- **Frontend:** React 18, Vite, Tailwind CSS, Lucide icons.
+- **Backend:** Python, FastAPI, LangGraph, SQLAlchemy.
+- **Storage:** SQLite by default; PostgreSQL can be configured with `DATABASE_URL`.
+- **Optional AI:** Google Gemini through `GEMINI_API_KEY` (or `GOOGLE_API_KEY`).
 
-## Technical Architecture
+## Run locally
 
-The **target production architecture** utilizes LangGraph for stateful orchestration, a RAG-based knowledge layer for policies and SOPs, backed by PostgreSQL and full audit logging.
+From the repository root, open two terminals.
 
-**This Prototype** demonstrates the core loop and consists of:
-- **Backend:** Python / FastAPI. It manages the orchestration, AI reasoning (Gemini API with tool calling), policy engine, and simulated API ledgers.
-- **Frontend:** React.js / Tailwind CSS. It provides a real-time operations dashboard visualizing the agent's timeline, the generated narrative, and the final resolution.
+### Backend
 
----
+```powershell
+py -3 -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -r backend\requirements.txt
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
+```
 
-## Test Scenarios
+To enable Gemini, create `backend/.env` with `GEMINI_API_KEY=your_key`. The app works without it using deterministic investigation narratives. Do not commit `.env` files.
 
-The prototype mocks three specific scenarios to demonstrate the platform's decision-making capabilities:
-* **TX9281 (Clear-cut Auto-Reversal):** A low-risk payment where the customer was debited but the merchant was not credited. The system safely executes an autonomous reversal.
-* **TX9342 (Ambiguous Escalation):** A high-risk, high-value transaction with conflicting network states. The system safely halts and escalates to a human agent, providing the investigation narrative as context.
-* **TX9410 (No Action):** A successfully settled and consistent transaction across all 4 ledgers. No action is taken.
+### Frontend
 
----
+```powershell
+cd frontend
+npm ci
+npm run dev
+```
 
-## Running the Prototype locally
+Open `http://localhost:3000`. Vite proxies `/api` requests to the backend on port 8000.
 
-You will need two terminal windows to run both the FastAPI backend and the React frontend.
+## Demo accounts
 
-### 1. Backend Setup (FastAPI)
-1. Create a `.env` file inside the `backend/` directory and add your Gemini API key (see `backend/.env.example`).
-   ```env
-   GEMINI_API_KEY=your_api_key_here
-   ```
-2. Install dependencies:
-   ```bash
-   pip install -r backend/requirements.txt
-   ```
-3. Start the backend server (from the root directory):
-   ```bash
-   python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
-   ```
+| Workspace | Email | Password |
+| --- | --- | --- |
+| Customer | `vansh@zerotouch.demo` | `demo123` |
+| Support team | `support@zerotouch.demo` | `demo123` |
 
-### 2. Frontend Setup (React/Vite)
-1. Navigate to the frontend directory:
-   ```bash
-   cd frontend
-   ```
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Start the frontend development server:
-   ```bash
-   npm run dev
-   ```
-4. Open the displayed `localhost` URL (usually `http://localhost:3000` or `5173`) in your browser to interact with the dashboard.
+These fixed credentials and in-memory sessions are only for the local demo, not production authentication.
+
+## Demo scenarios
+
+- **TX9281 — safe reversal:** ₹2,500 debit, merchant not credited, low risk, no prior refund. The deterministic policy permits a simulated reversal and the workflow verifies it.
+- **TX9342 — human review:** ₹18,000, unresolved network state, high risk. Automatic action is blocked and the case is escalated.
+- **RF202 — refund SLA:** overdue refund triggers a simulated bank follow-up.
+- **RF204 — refund bounced:** invalid destination routes to the wallet-credit demo action.
+- **S301 — settlement explanation:** ₹10,000 gross, ₹300 platform fee, ₹50 GST, and ₹9,650 net.
+- **S302 — settlement explanation:** a simulated ₹50,000 settlement is itemized as ₹1,000 fees and ₹49,000 net.
+- **S306 — compliance hold:** high-risk KYC hold is escalated; funds are not autonomously released.
+
+Suggested three-minute walkthrough: sign in as Vansh and ask about the ₹2,500 debit; review the evidence and verified action; try the ₹9,650 settlement question; sign out and enter the support workspace; inspect the TX9281 audit trace; then run or inspect TX9342 to show policy-controlled human escalation.
+
+## API overview
+
+- `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth/logout`
+- Customer: `GET /api/customer/profile`, `/transactions`, `/cases`, `/messages`; `POST /api/chat`
+- Support: `GET /api/transactions`, `GET /api/resolutions/{id}/events`, `POST /api/resolutions/{id}/run`, `POST /api/resolutions/{id}/human-decision`, `GET /api/admin/dashboard`, `/review-queue`, `/audit-logs`
+- Integration demo: `POST /api/webhook/npci`
+
+## Prototype limits
+
+- Demo accounts are hard-coded and sessions are held in memory; signing out or restarting the backend invalidates them.
+- Ledgers, refunds, wallet credits, SLA chases, and notifications are simulated. No real customer data or payment rails are used.
+- The default SQLite store is local to the working directory. Configure `DATABASE_URL` for a PostgreSQL instance.
+- RAG embeddings and Gemini tool calling require a configured Gemini key and network access; policy authorization remains deterministic either way.
+- This demo does not implement production identity verification, account ownership, rate limiting, or a production webhook secret. Do not deploy it as-is.
