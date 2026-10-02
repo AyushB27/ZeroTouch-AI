@@ -3,10 +3,13 @@ import {
   LayoutDashboard, ArrowLeftRight, Banknote, BarChart2,
   HelpCircle, Bell, Search, ChevronDown, RefreshCw,
   Zap, Eye, AlertTriangle, CheckCircle2, Clock, XCircle,
-  X, ShieldAlert, Loader2, User, MoreVertical, Play
+  X, ShieldAlert, Loader2, User, MoreVertical, Play,
+  Smartphone, Store, Info, SplitSquareVertical, ArrowUpRight
 } from 'lucide-react';
 import AgentTrace from './components/AgentTrace';
 import HITLQueue  from './components/HITLQueue';
+import ClientExperienceView from './components/ClientExperienceView';
+import UserRolesModal from './components/UserRolesModal';
 import { getTransactions, runResolution, resetDemo, getEvents } from './api';
 
 // ── constants ─────────────────────────────────────────────────────────────────
@@ -25,17 +28,15 @@ const STATUS_META = {
 };
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
-const NAV = [
-  { icon: LayoutDashboard, label: 'Dashboard'    },
-  { icon: ArrowLeftRight,  label: 'Transactions', active: true },
-  { icon: Banknote,        label: 'Settlements'  },
-  { icon: BarChart2,       label: 'Reports'      },
-  { icon: HelpCircle,      label: 'Help'         },
-];
+function Sidebar({ activeNav, onSelectNav, onOpenRolesModal }) {
+  const navItems = [
+    { id: 'transactions', icon: ArrowLeftRight,  label: 'Exceptions (Ops)' },
+    { id: 'client_view',  icon: Smartphone,      label: 'Client Simulator' },
+    { id: 'split_view',   icon: SplitSquareVertical, label: 'Split Integration' },
+  ];
 
-function Sidebar() {
   return (
-    <aside className="w-56 bg-paytm-dark flex flex-col shrink-0 h-full">
+    <aside className="w-56 bg-paytm-dark flex flex-col shrink-0 h-full select-none">
       {/* Logo */}
       <div className="h-16 flex items-center px-5 border-b border-white/10">
         <div className="flex items-center gap-2">
@@ -46,26 +47,46 @@ function Sidebar() {
             <div className="text-white font-extrabold text-sm leading-none tracking-tight">
               pay<span className="text-paytm-primary">tm</span>
             </div>
-            <div className="text-blue-300 text-[9px] font-semibold leading-none mt-0.5">for Business</div>
+            <div className="text-blue-300 text-[9px] font-semibold leading-none mt-0.5">for Business · Ops</div>
           </div>
         </div>
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 py-4 space-y-0.5 px-2">
-        {NAV.map(({ icon: Icon, label, active }) => (
+      <nav className="flex-1 py-4 space-y-1 px-2">
+        <div className="text-[10px] font-bold text-blue-300/70 uppercase px-3 mb-2 tracking-wider">
+          Portals & Views
+        </div>
+        {navItems.map(({ id, icon: Icon, label }) => {
+          const active = activeNav === id;
+          return (
+            <button
+              key={id}
+              onClick={() => onSelectNav(id)}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-bold transition-all ${
+                active
+                  ? 'bg-paytm-primary text-white shadow-sm'
+                  : 'text-blue-200 hover:bg-white/10 hover:text-white'
+              }`}
+            >
+              <Icon size={16} />
+              {label}
+            </button>
+          );
+        })}
+
+        <div className="pt-4 mt-4 border-t border-white/10">
+          <div className="text-[10px] font-bold text-blue-300/70 uppercase px-3 mb-2 tracking-wider">
+            Architecture
+          </div>
           <button
-            key={label}
-            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-              active
-                ? 'bg-paytm-primary/20 text-paytm-primary'
-                : 'text-blue-200 hover:bg-white/10 hover:text-white'
-            }`}
+            onClick={onOpenRolesModal}
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-semibold text-blue-200 hover:bg-white/10 hover:text-white transition-colors"
           >
-            <Icon size={16} />
-            {label}
+            <Info size={16} />
+            Who Uses What?
           </button>
-        ))}
+        </div>
       </nav>
 
       {/* Bottom badge */}
@@ -76,7 +97,7 @@ function Sidebar() {
             <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             <span className="text-[11px] text-emerald-300 font-semibold">Autonomous Mode</span>
           </div>
-          <div className="text-[10px] text-blue-300 mt-1 font-mono">PROTOTYPE</div>
+          <div className="text-[10px] text-blue-300 mt-1 font-mono">LANGGRAPH + RAG</div>
         </div>
       </div>
     </aside>
@@ -204,7 +225,7 @@ function TxTable({ txList, onInvestigate, onView, busyId }) {
 }
 
 // ── Right slide-over panel ────────────────────────────────────────────────────
-function SlidePanel({ open, onClose, title, children, badge }) {
+function SlidePanel({ open, onClose, title, children, badge, width = "w-[520px]" }) {
   return (
     <>
       {/* Backdrop */}
@@ -215,7 +236,7 @@ function SlidePanel({ open, onClose, title, children, badge }) {
         />
       )}
       {/* Panel */}
-      <div className={`fixed right-0 top-0 h-full w-[460px] bg-white shadow-2xl z-40 flex flex-col transition-transform duration-300 ${open ? 'translate-x-0' : 'translate-x-full'}`}>
+      <div className={`fixed right-0 top-0 h-full ${width} max-w-[95vw] bg-white shadow-2xl z-40 flex flex-col transition-transform duration-300 ${open ? 'translate-x-0' : 'translate-x-full'}`}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 bg-slate-50 shrink-0">
           <div className="flex items-center gap-2">
             <span className="font-bold text-slate-800 text-sm">{title}</span>
@@ -253,22 +274,31 @@ function TxDetailPanel({ tx, events, result, isRunning, onRun, onClose }) {
   return (
     <div className="flex flex-col h-full">
       {/* Tabs */}
-      <div className="flex border-b border-slate-100 shrink-0">
-        {[{id:'details',label:'Details'},{id:'trace',label:'Agent Trace'},{id:'hitl',label:'HITL'}].map(t=>(
+      <div className="flex border-b border-slate-100 shrink-0 bg-slate-50/50">
+        {[
+          { id: 'details', label: 'Details' },
+          { id: 'trace',   label: 'Agent Trace' },
+          { id: 'client',  label: 'Client Impact' },
+          { id: 'hitl',   label: 'HITL' },
+        ].map(t => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
-            className={`px-5 py-3 text-xs font-bold border-b-2 transition-colors ${
-              tab===t.id ? 'border-paytm-primary text-paytm-dark' : 'border-transparent text-slate-400 hover:text-slate-600'
+            className={`px-4 py-3 text-xs font-bold border-b-2 transition-colors ${
+              tab === t.id
+                ? 'border-paytm-primary text-paytm-dark bg-white'
+                : 'border-transparent text-slate-400 hover:text-slate-600'
             }`}
           >
             {t.label}
-            {t.id==='trace' && isRunning && <Loader2 size={10} className="inline ml-1 animate-spin text-paytm-primary"/>}
+            {t.id === 'trace' && isRunning && (
+              <Loader2 size={10} className="inline ml-1 animate-spin text-paytm-primary" />
+            )}
           </button>
         ))}
       </div>
 
-      {tab==='details' && (
+      {tab === 'details' && (
         <div className="flex-1 overflow-y-auto">
           {/* Header */}
           <div className="px-5 py-5 border-b border-slate-50 bg-paytm-dark/5">
@@ -298,9 +328,9 @@ function TxDetailPanel({ tx, events, result, isRunning, onRun, onClose }) {
 
           {/* Action */}
           <div className="p-5">
-            {tx.resolution_status==='PENDING' ? (
+            {tx.resolution_status === 'PENDING' ? (
               <button
-                onClick={()=>{setTab('trace'); onRun(tx.transaction_id);}}
+                onClick={() => { setTab('trace'); onRun(tx.transaction_id); }}
                 disabled={isRunning}
                 className="w-full flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm bg-paytm-primary hover:bg-paytm-dark text-white transition-colors disabled:opacity-60 shadow-sm"
               >
@@ -321,12 +351,18 @@ function TxDetailPanel({ tx, events, result, isRunning, onRun, onClose }) {
         </div>
       )}
 
-      {tab==='trace' && (
+      {tab === 'trace' && (
         <AgentTrace events={events} result={result} isRunning={isRunning}/>
       )}
 
-      {tab==='hitl' && (
-        tx.resolution_status==='ESCALATED'
+      {tab === 'client' && (
+        <div className="flex-1 overflow-hidden">
+          <ClientExperienceView selectedTxId={tx.transaction_id} result={result} />
+        </div>
+      )}
+
+      {tab === 'hitl' && (
+        tx.resolution_status === 'ESCALATED'
           ? <HITLQueue escalated={[tx]} onDecision={onClose}/>
           : (
             <div className="flex-1 flex flex-col items-center justify-center gap-2 text-slate-400 px-6 text-center p-8">
@@ -342,10 +378,12 @@ function TxDetailPanel({ tx, events, result, isRunning, onRun, onClose }) {
 
 // ── Main App ──────────────────────────────────────────────────────────────────
 export default function App() {
+  const [activeNav,    setActiveNav]    = useState('transactions'); // 'transactions' | 'client_view' | 'split_view'
   const [txList,       setTxList]       = useState([]);
   const [selectedTx,   setSelectedTx]   = useState(null);
   const [panelOpen,    setPanelOpen]    = useState(false);
   const [hitlOpen,     setHitlOpen]     = useState(false);
+  const [rolesModalOpen, setRolesModalOpen] = useState(false);
   const [activeResult, setActiveResult] = useState(null);
   const [activeEvents, setActiveEvents] = useState([]);
   const [busyId,       setBusyId]       = useState(null);
@@ -396,7 +434,6 @@ export default function App() {
 
   const handleView = (tx) => {
     setSelectedTx(tx);
-    // Restore existing events for already-resolved transactions
     if (tx.resolution_status !== 'PENDING') {
       getEvents(tx.transaction_id).then(setActiveEvents).catch(()=>{});
     } else {
@@ -440,28 +477,72 @@ export default function App() {
     <div className="min-h-screen bg-[#F5F7FA] flex h-screen overflow-hidden">
 
       {/* ── Sidebar ── */}
-      <Sidebar />
+      <Sidebar
+        activeNav={activeNav}
+        onSelectNav={setActiveNav}
+        onOpenRolesModal={() => setRolesModalOpen(true)}
+      />
 
       {/* ── Main area ── */}
       <div className="flex-1 flex flex-col overflow-hidden">
 
         {/* Top header */}
-        <header className="h-16 bg-white border-b border-slate-200 flex items-center px-6 gap-4 shrink-0 shadow-sm">
+        <header className="h-16 bg-white border-b border-slate-200 flex items-center px-6 gap-4 shrink-0 shadow-sm z-20">
           <div>
-            <h1 className="font-extrabold text-slate-800 text-base leading-none">Transaction Exceptions</h1>
-            <p className="text-xs text-slate-400 mt-0.5">ZeroTouch AI · Payment Operations</p>
+            <h1 className="font-extrabold text-slate-800 text-base leading-none">
+              {activeNav === 'transactions' && 'Transaction Exceptions & Ops'}
+              {activeNav === 'client_view'  && 'Client Surface Simulator (Customer & Merchant)'}
+              {activeNav === 'split_view'   && 'Real-Time Integration Split View'}
+            </h1>
+            <p className="text-xs text-slate-400 mt-0.5">Paytm Operations · Autonomous AI Resolution Engine</p>
           </div>
 
-          {/* Search */}
-          <div className="flex items-center gap-2 bg-slate-100 rounded-lg px-3 py-2 ml-6 w-64">
-            <Search size={14} className="text-slate-400 shrink-0"/>
-            <input
-              className="bg-transparent text-sm outline-none w-full placeholder-slate-400"
-              placeholder="Search transactions..."
-              value={searchQ}
-              onChange={e => setSearchQ(e.target.value)}
-            />
+          {/* Quick Nav Mode Pills */}
+          <div className="hidden lg:flex items-center gap-1 bg-slate-100 p-1 rounded-xl ml-4">
+            <button
+              onClick={() => setActiveNav('transactions')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                activeNav === 'transactions'
+                  ? 'bg-white text-paytm-dark shadow-sm'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <ArrowLeftRight size={13} /> Ops Dashboard
+            </button>
+            <button
+              onClick={() => setActiveNav('client_view')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                activeNav === 'client_view'
+                  ? 'bg-white text-paytm-dark shadow-sm'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Smartphone size={13} /> Client Experience
+            </button>
+            <button
+              onClick={() => setActiveNav('split_view')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                activeNav === 'split_view'
+                  ? 'bg-white text-paytm-dark shadow-sm'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <SplitSquareVertical size={13} /> Split View
+            </button>
           </div>
+
+          {/* Search (only on transactions) */}
+          {activeNav === 'transactions' && (
+            <div className="hidden md:flex items-center gap-2 bg-slate-100 rounded-lg px-3 py-2 ml-auto w-60">
+              <Search size={14} className="text-slate-400 shrink-0"/>
+              <input
+                className="bg-transparent text-sm outline-none w-full placeholder-slate-400"
+                placeholder="Search transactions..."
+                value={searchQ}
+                onChange={e => setSearchQ(e.target.value)}
+              />
+            </div>
+          )}
 
           <div className="ml-auto flex items-center gap-3">
             {error && (
@@ -469,6 +550,15 @@ export default function App() {
                 <XCircle size={12}/>{error}
               </div>
             )}
+
+            {/* Architecture Info Pill */}
+            <button
+              onClick={() => setRolesModalOpen(true)}
+              className="hidden sm:flex items-center gap-1.5 text-xs font-semibold text-paytm-dark bg-blue-50 hover:bg-blue-100 border border-blue-200 px-3 py-2 rounded-lg transition-colors"
+            >
+              <Info size={13} className="text-paytm-primary" />
+              <span>Who Uses This?</span>
+            </button>
 
             {/* HITL badge */}
             {escalated.length > 0 && (
@@ -493,42 +583,76 @@ export default function App() {
               Reset Demo
             </button>
 
-            {/* Notification bell */}
-            <button className="relative w-9 h-9 flex items-center justify-center rounded-lg hover:bg-slate-100 transition-colors">
-              <Bell size={18} className="text-slate-500"/>
-              {escalated.length > 0 && (
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-rose-500 rounded-full"/>
-              )}
-            </button>
-
             {/* Avatar */}
             <div className="flex items-center gap-2 cursor-pointer">
               <div className="w-8 h-8 rounded-full bg-paytm-dark flex items-center justify-center">
                 <User size={15} className="text-white"/>
               </div>
-              <ChevronDown size={14} className="text-slate-400"/>
             </div>
           </div>
         </header>
 
-        {/* Content */}
-        <main className="flex-1 overflow-y-auto p-6">
-          <StatsRow txList={txList}/>
+        {/* ── Content Router ── */}
+        {activeNav === 'transactions' && (
+          <main className="flex-1 overflow-y-auto p-6">
+            <StatsRow txList={txList}/>
 
-          {/* Table header */}
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-bold text-slate-700">
-              All Exceptions <span className="text-slate-400 font-normal ml-1">({filtered.length})</span>
-            </h2>
-          </div>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-bold text-slate-700">
+                Payment Exceptions & Edge Cases <span className="text-slate-400 font-normal ml-1">({filtered.length})</span>
+              </h2>
+            </div>
 
-          <TxTable
-            txList={filtered}
-            onInvestigate={handleInvestigate}
-            onView={handleView}
-            busyId={busyId}
-          />
-        </main>
+            <TxTable
+              txList={filtered}
+              onInvestigate={handleInvestigate}
+              onView={handleView}
+              busyId={busyId}
+            />
+          </main>
+        )}
+
+        {activeNav === 'client_view' && (
+          <main className="flex-1 overflow-hidden">
+            <ClientExperienceView
+              selectedTxId={selectedTx?.transaction_id}
+              result={activeResult}
+              onSelectTx={(id) => {
+                const found = txList.find(t => t.transaction_id === id);
+                if (found) setSelectedTx(found);
+              }}
+            />
+          </main>
+        )}
+
+        {activeNav === 'split_view' && (
+          <main className="flex-1 flex overflow-hidden">
+            {/* Left 50%: Ops Transactions Table & Trigger */}
+            <div className="w-1/2 border-r border-slate-200 flex flex-col overflow-y-auto p-5 bg-white">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Internal Ops Trigger</h3>
+                  <p className="text-[11px] text-slate-400">Click Investigate on any transaction to watch the client side update live</p>
+                </div>
+              </div>
+              <TxTable
+                txList={filtered}
+                onInvestigate={handleInvestigate}
+                onView={handleView}
+                busyId={busyId}
+              />
+            </div>
+
+            {/* Right 50%: Client Experience Screen */}
+            <div className="w-1/2 flex flex-col overflow-hidden bg-slate-100">
+              <ClientExperienceView
+                selectedTxId={busyId || selectedTx?.transaction_id || 'TX9281'}
+                result={activeResult}
+              />
+            </div>
+          </main>
+        )}
+
       </div>
 
       {/* ── Transaction detail slide-over ── */}
@@ -561,6 +685,12 @@ export default function App() {
       >
         <HITLQueue escalated={escalated} onDecision={async () => { await loadTx(); }}/>
       </SlidePanel>
+
+      {/* ── User Roles & Architecture Modal ── */}
+      <UserRolesModal
+        open={rolesModalOpen}
+        onClose={() => setRolesModalOpen(false)}
+      />
 
     </div>
   );
