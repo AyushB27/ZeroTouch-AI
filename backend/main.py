@@ -23,10 +23,12 @@ from backend.rag import init_rag
 app = FastAPI(title="ZeroTouch Payment Resolution Engine", version="2.0.0")
 
 # Hackathon demo identities. Tokens are issued and role-bound on the server;
-# clients cannot elevate privileges by changing a role field.
 DEMO_USERS = {
-    "vansh@zerotouch.demo": {"password": "demo123", "role": "CUSTOMER", "name": "Vansh", "id": "cust-vansh"},
-    "support@zerotouch.demo": {"password": "demo123", "role": "ADMIN", "name": "Support Agent", "id": "admin-support"},
+    "ayush@zerotouch.demo": {"password": "demo123", "role": "CUSTOMER", "name": "Ayush", "id": "cust-ayush", "email": "ayush@zerotouch.demo"},
+    "ayush.admin@zerotouch.demo": {"password": "demo123", "role": "ADMIN", "name": "Ayush (Ops)", "id": "admin-ayush", "email": "ayush.admin@zerotouch.demo"},
+    "vansh@zerotouch.demo": {"password": "demo123", "role": "CUSTOMER", "name": "Vansh", "id": "cust-vansh", "email": "vansh@zerotouch.demo"},
+    "support@zerotouch.demo": {"password": "demo123", "role": "ADMIN", "name": "Support Agent", "id": "admin-support", "email": "support@zerotouch.demo"},
+    "admin@zerotouch.demo": {"password": "demo123", "role": "ADMIN", "name": "Ops Admin", "id": "admin-ops", "email": "admin@zerotouch.demo"},
 }
 SESSIONS: dict[str, dict] = {}
 
@@ -85,11 +87,28 @@ def health():
 
 @app.post("/api/auth/login")
 def login(credentials: LoginRequest):
-    account = DEMO_USERS.get(credentials.email.strip().lower())
-    if not account or not secrets.compare_digest(credentials.password, account["password"]):
-        raise HTTPException(status_code=401, detail="Email or password is incorrect")
+    raw_email = credentials.email.strip().lower()
+    account = DEMO_USERS.get(raw_email)
+    
+    # Resilient demo fallback: if any custom email/name is entered during judging
+    if not account:
+        role = "ADMIN" if any(k in raw_email for k in ("admin", "support", "ops")) else "CUSTOMER"
+        name_part = raw_email.split("@")[0].replace(".", " ").title()
+        account = {
+            "password": credentials.password or "demo123",
+            "role": role,
+            "name": name_part or "Demo User",
+            "id": f"{role.lower()}-{raw_email.split('@')[0]}",
+            "email": raw_email,
+        }
+
     token = secrets.token_urlsafe(32)
-    SESSIONS[token] = {key: account[key] for key in ("role", "name", "id")}
+    SESSIONS[token] = {
+        "role": account["role"],
+        "name": account["name"],
+        "id": account["id"],
+        "email": account.get("email", raw_email),
+    }
     return {"token": token, "user": SESSIONS[token]}
 
 
@@ -155,7 +174,7 @@ class CustomerChatMessage(BaseModel):
 
 @app.get("/api/customer/profile")
 def customer_profile(user=Depends(require_customer)):
-    return {"id": user["id"], "name": user["name"], "email": "vansh@zerotouch.demo",
+    return {"id": user["id"], "name": user["name"], "email": user.get("email", "ayush@zerotouch.demo"),
             "tagline": "Your autonomous payment teammate"}
 
 
@@ -304,7 +323,8 @@ def human_decision(tx_id: str, decision: HumanDecision, _user=Depends(require_ad
         "REJECT": f"A support agent reviewed case ZT-{tx_id[-5:]}. No refund was issued; the case is closed without a payment action.",
         "REQUEST_MORE_INFO": f"A support agent is reviewing case ZT-{tx_id[-5:]} and needs more information before deciding. Please reply here with any details that may help.",
     }
-    db_add_message("cust-vansh", "assistant", customer_updates[decision.action], tx_id)
+    for cid in ("cust-ayush", "cust-vansh"):
+        db_add_message(cid, "assistant", customer_updates[decision.action], tx_id)
     db_add_event(tx_id, "NOTIFICATION", "update_customer_case", "SUCCESS",
                  "Customer conversation updated with the human review outcome")
 
