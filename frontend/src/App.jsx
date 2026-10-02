@@ -147,7 +147,7 @@ function TxTable({ txList, onInvestigate, onView, busyId }) {
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-slate-100 bg-slate-50">
-            {['Transaction ID','Amount','Workflow','Bank Status','Network','Risk','Status','Action'].map(h => (
+            {['Tx ID & Customer', 'Amount', 'CIBIL', 'Tenure', 'Workflow', 'Bank Status', 'Status', 'Action'].map(h => (
               <th key={h} className="text-left text-[11px] font-bold text-slate-400 uppercase tracking-wider px-4 py-3 whitespace-nowrap">
                 {h}
               </th>
@@ -159,14 +159,40 @@ function TxTable({ txList, onInvestigate, onView, busyId }) {
             const wf = WF_LABELS[tx.workflow_type] || tx.workflow_type;
             const isResolvable = tx.resolution_status === 'PENDING';
             const isBusy = busyId === tx.transaction_id;
+            const cibil = tx.cibil_score || 750;
+            const isFTU = tx.is_first_time_user;
 
             return (
               <tr key={tx.transaction_id} className="hover:bg-slate-50/60 transition-colors">
                 <td className="px-4 py-3.5">
-                  <span className="font-bold text-slate-800 font-mono">{tx.transaction_id}</span>
+                  <span className="font-bold text-slate-800 font-mono text-xs">{tx.transaction_id}</span>
+                  <span className="text-[11px] text-slate-500 font-medium block truncate max-w-[130px]">
+                    {tx.customer_name || 'Paytm User'}
+                  </span>
                 </td>
                 <td className="px-4 py-3.5 font-semibold text-slate-700 whitespace-nowrap">
                   ₹{tx.amount.toLocaleString('en-IN')}
+                </td>
+                <td className="px-4 py-3.5 whitespace-nowrap">
+                  <span className={`inline-flex items-center gap-1 font-mono font-bold text-xs px-2 py-0.5 rounded-full ${
+                    cibil >= 750 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                    cibil >= 650 ? 'bg-blue-50 text-blue-700 border border-blue-200' :
+                    'bg-rose-50 text-rose-700 border border-rose-200'
+                  }`}>
+                    {cibil}
+                    <span className="text-[9px] font-sans font-medium opacity-80">
+                      ({cibil >= 750 ? 'Prime' : cibil >= 650 ? 'Good' : 'Subprime'})
+                    </span>
+                  </span>
+                </td>
+                <td className="px-4 py-3.5 whitespace-nowrap">
+                  {isFTU ? (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
+                      ⭐ First-Time
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-slate-400 font-medium">Regular</span>
+                  )}
                 </td>
                 <td className="px-4 py-3.5">
                   <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${WF_PILL[tx.workflow_type] || 'bg-slate-100 text-slate-600'}`}>
@@ -174,12 +200,6 @@ function TxTable({ txList, onInvestigate, onView, busyId }) {
                   </span>
                 </td>
                 <td className="px-4 py-3.5 text-slate-600 text-xs whitespace-nowrap">{tx.bank_status}</td>
-                <td className="px-4 py-3.5 text-slate-600 text-xs whitespace-nowrap">{tx.network_status}</td>
-                <td className="px-4 py-3.5">
-                  <span className={`text-xs font-bold ${tx.risk_score >= 0.5 ? 'text-rose-600' : tx.risk_score >= 0.3 ? 'text-amber-600' : 'text-emerald-600'}`}>
-                    {(tx.risk_score * 100).toFixed(0)}%
-                  </span>
-                </td>
                 <td className="px-4 py-3.5">
                   <StatusPill status={tx.resolution_status} />
                 </td>
@@ -225,7 +245,7 @@ function TxTable({ txList, onInvestigate, onView, busyId }) {
 }
 
 // ── Right slide-over panel ────────────────────────────────────────────────────
-function SlidePanel({ open, onClose, title, children, badge, width = "w-[520px]" }) {
+function SlidePanel({ open, onClose, title, children, badge, width = "w-[540px]" }) {
   return (
     <>
       {/* Backdrop */}
@@ -259,6 +279,9 @@ function TxDetailPanel({ tx, events, result, isRunning, onRun, onClose }) {
 
   const fields = [
     ['Transaction ID', tx.transaction_id],
+    ['Customer Name',  tx.customer_name || 'Paytm User'],
+    ['CIBIL Score',    `${tx.cibil_score || 750} (${(tx.cibil_score || 750) >= 750 ? 'Prime' : (tx.cibil_score || 750) >= 650 ? 'Good' : 'Subprime'})`],
+    ['Tenure',         tx.is_first_time_user ? '⭐ First-Time User' : 'Regular Customer'],
     ['Amount',         `₹${tx.amount.toLocaleString('en-IN')}`],
     ['Workflow',       WF_LABELS[tx.workflow_type] || tx.workflow_type],
     ['Bank Status',    tx.bank_status],

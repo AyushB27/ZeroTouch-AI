@@ -1,11 +1,13 @@
 import React, { useRef, useEffect } from 'react';
 import {
   CheckCircle2, XCircle, Info, Loader2, Zap, Shield,
-  Building2, Radio, Store, Banknote, Bell, AlertTriangle, FileText
+  Building2, Radio, Store, Banknote, Bell, AlertTriangle, FileText,
+  UserCheck, Sparkles, MessageSquare
 } from 'lucide-react';
 
 const TYPE_STYLE = {
   INVESTIGATION: { dot: 'bg-paytm-primary', label: 'text-blue-700',   bg: 'bg-blue-50'   },
+  RISK_ANALYSIS: { dot: 'bg-indigo-600',    label: 'text-indigo-700', bg: 'bg-indigo-50' },
   POLICY:        { dot: 'bg-violet-500',    label: 'text-violet-700',  bg: 'bg-violet-50' },
   ACTION:        { dot: 'bg-teal-500',      label: 'text-teal-700',    bg: 'bg-teal-50'   },
   VERIFICATION:  { dot: 'bg-emerald-500',   label: 'text-emerald-700', bg: 'bg-emerald-50'},
@@ -15,20 +17,35 @@ const TYPE_STYLE = {
 };
 
 const STEP_ICONS = {
-  check_bank_status:    Building2,
-  check_network_status: Radio,
-  check_merchant_ledger:Store,
-  check_settlement:     Banknote,
-  evaluate_policy:      Shield,
-  initiate_reversal:    Zap,
-  chase_bank_sla:       Zap,
-  offer_wallet_credit:  Zap,
+  // Ledger Agent
+  check_bank_status:         Building2,
+  check_network_status:      Radio,
+  check_merchant_ledger:     Store,
+  check_settlement:          Banknote,
+  investigator_agent_start:  Building2,
+  narrative_complete:        CheckCircle2,
+  // Risk & Credit Agent
+  risk_agent_start:          Shield,
+  cibil_credit_check:        Shield,
+  first_time_user_check:     UserCheck,
+  risk_verdict:              Zap,
+  // Policy Agent
+  policy_agent_start:        Shield,
+  evaluate_policy:           Shield,
+  search_policy:             FileText,
+  // Actions
+  initiate_reversal:         Zap,
+  chase_bank_sla:            Zap,
+  offer_wallet_credit:       Zap,
   generate_itemized_explanation: FileText,
-  flag_compliance_hold: AlertTriangle,
-  send_notification:    Bell,
-  create_support_case:  AlertTriangle,
-  search_policy:        FileText,
-  human_decision:       CheckCircle2,
+  flag_compliance_hold:      AlertTriangle,
+  verify_resolution:         CheckCircle2,
+  // Communication Agent
+  dynamic_drafting_start:    Sparkles,
+  dynamic_drafting_complete: Sparkles,
+  send_dynamic_notification: Bell,
+  create_support_case:       AlertTriangle,
+  human_decision:            CheckCircle2,
 };
 
 function StatusIcon({ status }) {
@@ -54,7 +71,7 @@ function EventRow({ event, isLast }) {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-0.5">
               <StatusIcon status={event.status} />
-              <span className={`text-[11px] font-bold uppercase tracking-wider ${style.label}`}>{event.type}</span>
+              <span className={`text-[11px] font-bold uppercase tracking-wider ${style.label}`}>{event.type.replace('_', ' ')}</span>
               <span className="text-[10px] text-slate-400 font-mono">{event.step}</span>
             </div>
             <p className="text-xs text-slate-700 leading-relaxed">{event.message}</p>
@@ -72,7 +89,6 @@ function ResultSummary({ result }) {
   if (!result) return null;
   const isResolved  = result.resolution_status === 'RESOLVED';
   const isEscalated = result.resolution_status === 'ESCALATED';
-  const isNoAction  = result.resolution_status === 'NO_ACTION';
 
   const bg    = isResolved ? 'bg-emerald-50 border-emerald-200' : isEscalated ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-200';
   const color = isResolved ? 'text-emerald-800' : isEscalated ? 'text-rose-800' : 'text-slate-700';
@@ -80,25 +96,47 @@ function ResultSummary({ result }) {
 
   return (
     <div className={`mx-4 mb-4 rounded-xl border p-4 ${bg}`}>
-      <div className={`flex items-center gap-2 font-bold text-sm mb-3 ${color}`}>
-        <Icon size={16} />
-        {result.decision?.replace(/_/g, ' ')}
+      <div className={`flex items-center justify-between font-bold text-sm mb-3 ${color}`}>
+        <div className="flex items-center gap-2">
+          <Icon size={16} />
+          {result.decision?.replace(/_/g, ' ')}
+        </div>
+        {result.cibil_score && (
+          <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded bg-white/80 border border-slate-200 text-slate-700">
+            CIBIL: {result.cibil_score}
+          </span>
+        )}
       </div>
+
       <div className="grid grid-cols-2 gap-2 text-xs">
         {[
           { k: 'Decision',     v: result.decision?.replace(/_/g, ' ') },
           { k: 'Authorized',   v: result.authorized ? 'Yes' : 'No'    },
           { k: 'Action Ref',   v: result.action_id || '—'             },
-          { k: 'Verified',     v: result.verification_status || '—'   },
-          { k: 'Customer',     v: result.notification_sent ? 'Notified' : 'Not notified' },
-          { k: 'Ticket',       v: result.support_case || 'Not required' },
+          { k: 'Verification', v: result.verification_status || '—'   },
+          { k: 'Customer',     v: result.customer_name || 'Paytm User' },
+          { k: 'Tenure',       v: result.is_first_time_user ? '⭐ First-Time User' : 'Regular Customer' },
         ].map(({ k, v }) => (
-          <div key={k} className={`${bg} rounded p-2 border border-white/80`}>
+          <div key={k} className="bg-white/90 rounded p-2 border border-slate-200/60 shadow-2xs">
             <div className="text-[10px] font-semibold text-slate-500 uppercase">{k}</div>
             <div className={`font-bold mt-0.5 truncate ${color}`}>{v}</div>
           </div>
         ))}
       </div>
+
+      {/* Dynamic Synthesized Message (No pre-built templates!) */}
+      {result.dynamic_message && (
+        <div className="mt-3 bg-white/90 rounded-lg p-3 border border-paytm-primary/30 shadow-2xs">
+          <div className="flex items-center gap-1.5 text-[10px] font-bold text-paytm-dark uppercase tracking-wider mb-1">
+            <Sparkles size={12} className="text-paytm-primary" />
+            Synthesized Customer Communication (No Pre-Built Template)
+          </div>
+          <p className="text-xs text-slate-800 leading-relaxed font-sans italic">
+            "{result.dynamic_message}"
+          </p>
+        </div>
+      )}
+
       {result.escalation_reason && (
         <div className="mt-3 text-xs text-rose-700 bg-rose-100 rounded p-2 leading-relaxed">
           <span className="font-bold">Escalation reason: </span>{result.escalation_reason}
@@ -121,10 +159,13 @@ export default function AgentTrace({ events, result, isRunning }) {
     <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
       <div className="px-5 py-3 border-b border-slate-100 bg-slate-50 flex items-center justify-between shrink-0">
-        <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">Live Agent Trace</div>
+        <div>
+          <div className="text-xs font-bold text-slate-700 uppercase tracking-wider">Multi-Agent Pipeline Trace</div>
+          <div className="text-[10px] text-slate-400">Ledger Investigator ➔ Risk/CIBIL ➔ Policy ➔ Dynamic Comm</div>
+        </div>
         {isRunning && (
           <div className="flex items-center gap-1.5 text-paytm-primary text-xs font-semibold">
-            <Loader2 size={12} className="animate-spin" /> Processing...
+            <Loader2 size={12} className="animate-spin" /> Agents executing...
           </div>
         )}
         {!isRunning && result && (
@@ -136,7 +177,7 @@ export default function AgentTrace({ events, result, isRunning }) {
       {events.length === 0 && !isRunning && (
         <div className="flex-1 flex flex-col items-center justify-center gap-3 text-slate-300">
           <Zap size={40} className="opacity-40" />
-          <p className="text-sm">Select a transaction and run ZeroTouch to see the agent trace</p>
+          <p className="text-sm">Select a transaction and run ZeroTouch to see multi-agent execution</p>
         </div>
       )}
 
@@ -152,7 +193,7 @@ export default function AgentTrace({ events, result, isRunning }) {
             </div>
             <div className="flex-1 bg-blue-50 rounded-lg px-3 py-2.5 border border-blue-100">
               <div className="flex items-center gap-2 text-xs text-paytm-primary font-semibold">
-                <Loader2 size={12} className="animate-spin" /> Agent is working...
+                <Loader2 size={12} className="animate-spin" /> Multi-Agent state machine running...
               </div>
             </div>
           </div>

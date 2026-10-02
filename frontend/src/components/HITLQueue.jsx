@@ -103,25 +103,57 @@ function CaseCard({ tx, onDecisionMade }) {
           <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">System Evidence</div>
           <EvidenceGrid tx={tx} />
 
+          {/* Customer Profile & CIBIL */}
+          <div className="bg-white border border-slate-200/80 rounded-lg p-3">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Customer Profile</span>
+              {tx.is_first_time_user && (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
+                  ⭐ First-Time User
+                </span>
+              )}
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="font-bold text-xs text-slate-800">{tx.customer_name || 'Paytm Customer'}</div>
+              <div className={`font-mono text-xs font-bold px-2 py-0.5 rounded ${
+                (tx.cibil_score || 750) >= 750 ? 'bg-emerald-100 text-emerald-800' :
+                (tx.cibil_score || 750) >= 650 ? 'bg-blue-100 text-blue-800' :
+                'bg-rose-100 text-rose-800'
+              }`}>
+                CIBIL: {tx.cibil_score || 750} ({(tx.cibil_score || 750) >= 750 ? 'Prime' : (tx.cibil_score || 750) >= 650 ? 'Good' : 'Subprime'})
+              </div>
+            </div>
+          </div>
+
           {/* Risk + amount */}
           <div className="flex gap-2 mb-2">
             <div className="flex-1 bg-white border border-slate-100 rounded-lg p-2.5">
-              <div className="text-[10px] font-bold text-slate-400 uppercase mb-1">Risk Score</div>
-              <div className={`text-lg font-black ${tx.risk_score >= 0.5 ? 'text-rose-600' : 'text-amber-600'}`}>
+              <div className="text-[10px] font-bold text-slate-400 uppercase mb-1">Fraud Risk</div>
+              <div className={`text-base font-black ${tx.risk_score >= 0.5 ? 'text-rose-600' : 'text-amber-600'}`}>
                 {(tx.risk_score * 100).toFixed(0)}%
               </div>
             </div>
             <div className="flex-1 bg-white border border-slate-100 rounded-lg p-2.5">
               <div className="text-[10px] font-bold text-slate-400 uppercase mb-1">Amount</div>
-              <div className="text-lg font-black text-slate-800">₹{tx.amount.toLocaleString('en-IN')}</div>
+              <div className="text-base font-black text-slate-800">₹{tx.amount.toLocaleString('en-IN')}</div>
             </div>
             <div className="flex-1 bg-white border border-slate-100 rounded-lg p-2.5">
               <div className="text-[10px] font-bold text-slate-400 uppercase mb-1">Prior Refund</div>
-              <div className={`text-lg font-black ${tx.previous_refund ? 'text-rose-600' : 'text-emerald-600'}`}>
+              <div className={`text-base font-black ${tx.previous_refund ? 'text-rose-600' : 'text-emerald-600'}`}>
                 {tx.previous_refund ? 'Yes' : 'No'}
               </div>
             </div>
           </div>
+
+          {/* AI Synthesized Draft (No Pre-built messages) */}
+          {tx.dynamic_message && (
+            <div className="bg-amber-50/70 border border-amber-200/80 rounded-lg p-3 text-xs">
+              <div className="text-[10px] font-bold text-amber-800 uppercase tracking-wider mb-1">
+                Draft Customer Notice (Synthesized by Communication Agent)
+              </div>
+              <p className="text-slate-700 italic">"{tx.dynamic_message}"</p>
+            </div>
+          )}
 
           {done ? (
             <div className={`flex items-center gap-2 py-3 px-4 rounded-lg font-bold text-sm ${

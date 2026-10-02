@@ -207,6 +207,22 @@ export default function ClientExperienceView({ selectedTxId, result, onSelectTx 
                     <div className="bg-white mt-2 px-4 py-3 space-y-3 text-xs border-y border-slate-100 relative">
                       <Callout num="4" text="Paytm UI updated live" show={showCallouts} positionClass="top-2 left-2" />
                       <div className="flex justify-between">
+                        <span className="text-slate-400">Customer</span>
+                        <div className="text-right">
+                          <span className="font-bold text-slate-800">{currentTx.customer_name || 'Paytm Customer'}</span>
+                          <div className="flex items-center gap-1.5 justify-end mt-0.5">
+                            {currentTx.is_first_time_user && (
+                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                                ⭐ First-Time User
+                              </span>
+                            )}
+                            <span className="text-[10px] font-mono font-bold text-emerald-700">
+                              CIBIL: {currentTx.cibil_score || 750}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex justify-between">
                         <span className="text-slate-400">UPI Ref ID</span>
                         <span className="font-mono font-bold text-slate-700">{currentTx.transaction_id}</span>
                       </div>
@@ -227,11 +243,17 @@ export default function ClientExperienceView({ selectedTxId, result, onSelectTx 
                         <div className="flex items-start gap-2">
                           <CheckCircle2 size={16} className="text-emerald-600 mt-0.5 shrink-0" />
                           <div>
-                            <div className="text-xs font-bold text-emerald-800">Auto-Refund Initiated</div>
-                            <div className="text-[11px] text-emerald-700 mt-0.5 leading-snug">
-                              ZeroTouch AI identified that ₹{currentTx.amount} was debited but not received by merchant. Full refund sent back to your account.
+                            <div className="text-xs font-bold text-emerald-800">
+                              Auto-Refund Initiated
                             </div>
-                            <div className="text-[10px] font-mono text-emerald-600 mt-1 font-bold">
+                            <div className="text-[11px] text-emerald-800 mt-0.5 leading-snug">
+                              {currentTx.dynamic_message ? (
+                                <span className="italic font-medium">"{currentTx.dynamic_message}"</span>
+                              ) : (
+                                `ZeroTouch AI identified that ₹${currentTx.amount} was debited but not received by merchant. Full refund sent back to your account.`
+                              )}
+                            </div>
+                            <div className="text-[10px] font-mono text-emerald-700 mt-1 font-bold">
                               Ref: {currentTx.action_id || `REV-${currentTx.transaction_id}`}
                             </div>
                           </div>
