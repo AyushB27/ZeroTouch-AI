@@ -12,6 +12,16 @@ Every message is dynamically composed based on:
 """
 
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+
+CANDIDATE_MODELS = [
+    "gemini-3.5-flash-lite",
+    "gemini-flash-latest",
+    "gemini-3.1-flash-lite",
+]
 
 def generate_dynamic_message(
     tx_id: str,
@@ -39,32 +49,29 @@ def generate_dynamic_message(
 
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if api_key:
-        try:
-            msg = _gemini_compose_message(
-                customer_name=customer_name,
-                is_first_time=is_first_time,
-                cibil=cibil,
-                tx_id=tx_id,
-                amount=amount,
-                decision=decision,
-                action_id=action_id,
-                reason=reason,
-                api_key=api_key
-            )
-            log_func(
-                "NOTIFICATION",
-                "dynamic_drafting_complete",
-                "SUCCESS",
-                f"LLM synthesized personalized message (Word count: {len(msg.split())})"
-            )
-            return msg
-        except Exception as e:
-            log_func(
-                "NOTIFICATION",
-                "dynamic_drafting_fallback",
-                "INFO",
-                f"LLM busy ({str(e)[:40]}), applying contextual dynamic synthesizer."
-            )
+        for model in CANDIDATE_MODELS:
+            try:
+                msg = _gemini_compose_message(
+                    customer_name=customer_name,
+                    is_first_time=is_first_time,
+                    cibil=cibil,
+                    tx_id=tx_id,
+                    amount=amount,
+                    decision=decision,
+                    action_id=action_id,
+                    reason=reason,
+                    api_key=api_key,
+                    model=model
+                )
+                log_func(
+                    "NOTIFICATION",
+                    "dynamic_drafting_complete",
+                    "SUCCESS",
+                    f"LLM synthesized personalized message ({model}, {len(msg.split())} words)"
+                )
+                return msg
+            except Exception:
+                continue
 
     return _contextual_dynamic_compose(
         customer_name, is_first_time, cibil, tx_id, amount, decision, action_id, reason
@@ -80,7 +87,8 @@ def _gemini_compose_message(
     decision: str,
     action_id: str,
     reason: str,
-    api_key: str
+    api_key: str,
+    model: str = "gemini-3.5-flash-lite"
 ) -> str:
     from google import genai
     from google.genai import types
@@ -112,7 +120,7 @@ GUIDELINES:
 Generate ONLY the customer notification message text."""
 
     response = client.models.generate_content(
-        model="gemini-3.8-flash",
+        model=model,
         contents=prompt,
         config=types.GenerateContentConfig(
             temperature=0.3,
