@@ -220,15 +220,17 @@ def node_act_itemize(state: ResolutionState) -> dict:
     log, collected = _make_log(state)
 
     try:
-        fee = float(tx["merchant_status"].split("_")[-1])
+        parts = tx["merchant_status"].split("_")
+        fee = float(parts[2]) if len(parts) > 2 and parts[1] == "DEDUCTION" else 0.0
+        gst = float(parts[4]) if len(parts) > 4 and parts[3] == "GST" else 0.0
     except (ValueError, IndexError):
-        fee = 0.0
+        fee, gst = 0.0, 0.0
 
     log("ACTION", "generate_itemized_explanation", "INFO",
         f"Settlement shortfall detected. Generating itemized reconciliation for {tx_id}")
-    result = generate_itemized_explanation(tx_id, tx["amount"], fee)
+    result = generate_itemized_explanation(tx_id, tx["amount"], fee, gst)
     log("ACTION", "generate_itemized_explanation", "SUCCESS",
-        f"Itemized breakdown sent to merchant: {result['explanation_ref']}. No dispute ticket raised.")
+        f"Itemized breakdown sent to merchant: gross ₹{result['gross_amount']:,.0f}, platform fee ₹{fee:,.0f}, GST ₹{gst:,.0f}, net ₹{result['net_settled']:,.0f}. Ref {result['explanation_ref']}.")
 
     return {"action_id": result["explanation_ref"], "events": collected}
 

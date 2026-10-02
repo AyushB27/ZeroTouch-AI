@@ -10,23 +10,26 @@ def evaluate_policy(evidence: Evidence) -> PolicyDecision:
     tx = evidence
 
     # Determine dynamic autonomous ceiling based on CIBIL and First-Time User status
-    if tx.cibil_score >= 750:
+    cibil = getattr(tx, "cibil_score", 750) if getattr(tx, "cibil_score", None) is not None else 750
+    is_first_time = getattr(tx, "is_first_time_user", False) or False
+
+    if cibil >= 750:
         cibil_limit = 10000.0
-        tier_note = f"Prime credit rating (CIBIL {tx.cibil_score}) qualifies for elevated ₹10,000 threshold."
-    elif tx.cibil_score >= 650:
+        tier_note = f"Prime credit rating (CIBIL {cibil}) qualifies for elevated ₹10,000 threshold."
+    elif cibil >= 650:
         cibil_limit = 5000.0
-        tier_note = f"Standard credit standing (CIBIL {tx.cibil_score}) capped at ₹5,000 threshold."
+        tier_note = f"Standard credit standing (CIBIL {cibil}) capped at ₹5,000 threshold."
     else:
         cibil_limit = 1500.0
-        tier_note = f"Subprime credit rating (CIBIL {tx.cibil_score}) restricted to ₹1,500 threshold."
+        tier_note = f"Subprime credit rating (CIBIL {cibil}) restricted to ₹1,500 threshold."
 
     # First-Time User High-Risk Filter
-    if tx.is_first_time_user and tx.amount > 5000.0 and tx.cibil_score < 650:
+    if is_first_time and tx.amount > 5000.0 and cibil < 650:
         return PolicyDecision(
             decision="HUMAN_ESCALATION",
             authorized=False,
             reason=(
-                f"High-value payment (₹{tx.amount:,.0f}) by First-Time User with subprime CIBIL ({tx.cibil_score}). "
+                f"High-value payment (₹{tx.amount:,.0f}) by First-Time User with subprime CIBIL ({cibil}). "
                 "Autonomous action prohibited. Mandatory human desk investigation required."
             ),
         )
@@ -54,7 +57,7 @@ def evaluate_policy(evidence: Evidence) -> PolicyDecision:
         and tx.risk < 0.30
         and not tx.previous_refund
     ):
-        ft_note = " First-Time User onboarding safety applied." if tx.is_first_time_user else ""
+        ft_note = " First-Time User onboarding safety applied." if is_first_time else ""
         return PolicyDecision(
             decision="AUTO_REVERSAL",
             authorized=True,
@@ -76,7 +79,7 @@ def evaluate_policy(evidence: Evidence) -> PolicyDecision:
             authorized=True,
             reason=(
                 "Refund was acknowledged by the bank but has not credited to the customer "
-                "within standard SLA window. Autonomous bank escalation API triggered per Rule 2.2."
+                "within the 5-day SLA window. Autonomous bank escalation API triggered per Rule 2.2."
             ),
         )
 
@@ -87,7 +90,7 @@ def evaluate_policy(evidence: Evidence) -> PolicyDecision:
         and tx.merchant == "REVERSED"
         and tx.settlement == "FAILED"
     ):
-        ft_note = " Customer is a First-Time User: prioritized instant Paytm Wallet credit to prevent churn." if tx.is_first_time_user else ""
+        ft_note = " Customer is a First-Time User: prioritized instant Paytm Wallet credit to prevent churn." if is_first_time else ""
         return PolicyDecision(
             decision="WALLET_CREDIT_OFFER",
             authorized=True,
@@ -105,16 +108,19 @@ def evaluate_policy(evidence: Evidence) -> PolicyDecision:
         and tx.settlement.startswith("PARTIAL_SETTLED")
         and tx.risk < 0.10
     ):
+        fee_parts = tx.merchant.split("_")
         try:
-            fee = float(tx.merchant.split("_")[-1])
-        except ValueError:
-            fee = 0.0
+            fee = float(fee_parts[2]) if len(fee_parts) > 2 and fee_parts[1] == "DEDUCTION" else 0.0
+            gst = float(fee_parts[4]) if len(fee_parts) > 4 and fee_parts[3] == "GST" else 0.0
+        except (ValueError, IndexError):
+            fee, gst = 0.0, 0.0
+        total_deduction = fee + gst
         return PolicyDecision(
             decision="ITEMIZED_EXPLANATION",
             authorized=True,
             reason=(
-                f"Merchant settlement shortfall of ₹{fee:.0f} is fully explained by "
-                "standard platform fees and GST. Per Rule 3.1: generate itemized breakdown "
+                f"Merchant settlement shortfall of ₹{total_deduction:,.0f} is fully explained by "
+                f"standard platform fee (₹{fee:,.0f}) and GST (₹{gst:,.0f}). Per Rule 3.1: generate itemized breakdown "
                 "and notify merchant. No ticket required."
             ),
         )
@@ -154,8 +160,8 @@ def evaluate_policy(evidence: Evidence) -> PolicyDecision:
         reasons.append(f"amount ₹{tx.amount:,.0f} exceeds CIBIL-backed autonomous limit (₹{cibil_limit:,.0f})")
     if tx.previous_refund and tx.bank == "DEBITED" and tx.merchant == "NOT_CREDITED":
         reasons.append("previous refund already issued for this transaction")
-    if tx.cibil_score < 620:
-        reasons.append(f"customer CIBIL score ({tx.cibil_score}) requires human supervisory sign-off")
+    if cibil < 620:
+        reasons.append(f"customer CIBIL score ({cibil}) requires human supervisory sign-off")
 
     reason_str = "Payment state could not be conclusively reconciled. " + (
         "; ".join(reasons).capitalize() + "." if reasons else "Manual review required."

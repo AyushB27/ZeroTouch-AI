@@ -78,6 +78,18 @@ webhooks_table = Table(
     Column("processed",      Boolean, default=False),
 )
 
+# Customer messages are persisted so a demo conversation survives page refreshes.
+conversation_messages_table = Table(
+    "conversation_messages",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("customer_id", String(50), nullable=False),
+    Column("transaction_id", String(50), nullable=True),
+    Column("role", String(20), nullable=False),
+    Column("content", Text, nullable=False),
+    Column("created_at", String(50), nullable=False),
+)
+
 
 def init_db():
     """Create all tables if they don't already exist."""
@@ -156,6 +168,7 @@ def db_reset_all():
     """Truncate all tables and re-seed."""
     with engine.begin() as conn:
         conn.execute(audit_events_table.delete())
+        conn.execute(conversation_messages_table.delete())
         conn.execute(transactions_table.delete())
     _seed_transactions()
 
@@ -178,3 +191,23 @@ def db_mark_webhook_processed(tx_ref: str):
             .where(webhooks_table.c.transaction_ref == tx_ref)
             .values(processed=True)
         )
+
+
+def db_add_message(customer_id: str, role: str, content: str, transaction_id: str | None = None):
+    ts = datetime.now(timezone.utc).isoformat()
+    with engine.begin() as conn:
+        result = conn.execute(conversation_messages_table.insert().values(
+            customer_id=customer_id, role=role, content=content,
+            transaction_id=transaction_id, created_at=ts,
+        ))
+        return {"id": result.inserted_primary_key[0], "customer_id": customer_id,
+                "transaction_id": transaction_id, "role": role, "content": content,
+                "created_at": ts}
+
+
+def db_get_messages(customer_id: str):
+    with engine.connect() as conn:
+        rows = conn.execute(conversation_messages_table.select()
+            .where(conversation_messages_table.c.customer_id == customer_id)
+            .order_by(conversation_messages_table.c.id)).mappings().all()
+        return [dict(row) for row in rows]
