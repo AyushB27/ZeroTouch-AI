@@ -16,6 +16,7 @@ from backend.database import (
     init_db, db_get_transaction, db_get_all_transactions,
     db_get_events, db_reset_all, db_log_webhook, db_mark_webhook_processed,
     db_update_transaction, db_add_message, db_get_messages,
+    db_get_messages_for_transaction,
 )
 from backend.orchestrator import run_resolution
 from backend.rag import init_rag
@@ -23,12 +24,10 @@ from backend.rag import init_rag
 app = FastAPI(title="ZeroTouch Payment Resolution Engine", version="2.0.0")
 
 # Hackathon demo identities. Tokens are issued and role-bound on the server;
+# clients cannot elevate privileges by changing a role field.
 DEMO_USERS = {
-    "ayush@zerotouch.demo": {"password": "demo123", "role": "CUSTOMER", "name": "Ayush", "id": "cust-ayush", "email": "ayush@zerotouch.demo"},
-    "ayush.admin@zerotouch.demo": {"password": "demo123", "role": "ADMIN", "name": "Ayush (Ops)", "id": "admin-ayush", "email": "ayush.admin@zerotouch.demo"},
-    "vansh@zerotouch.demo": {"password": "demo123", "role": "CUSTOMER", "name": "Vansh", "id": "cust-vansh", "email": "vansh@zerotouch.demo"},
-    "support@zerotouch.demo": {"password": "demo123", "role": "ADMIN", "name": "Support Agent", "id": "admin-support", "email": "support@zerotouch.demo"},
-    "admin@zerotouch.demo": {"password": "demo123", "role": "ADMIN", "name": "Ops Admin", "id": "admin-ops", "email": "admin@zerotouch.demo"},
+    "vansh@zerotouch.demo": {"password": "demo123", "role": "CUSTOMER", "name": "Vansh", "id": "cust-vansh"},
+    "support@zerotouch.demo": {"password": "demo123", "role": "ADMIN", "name": "Support Agent", "id": "admin-support"},
 }
 SESSIONS: dict[str, dict] = {}
 
@@ -87,28 +86,11 @@ def health():
 
 @app.post("/api/auth/login")
 def login(credentials: LoginRequest):
-    raw_email = credentials.email.strip().lower()
-    account = DEMO_USERS.get(raw_email)
-    
-    # Resilient demo fallback: if any custom email/name is entered during judging
-    if not account:
-        role = "ADMIN" if any(k in raw_email for k in ("admin", "support", "ops")) else "CUSTOMER"
-        name_part = raw_email.split("@")[0].replace(".", " ").title()
-        account = {
-            "password": credentials.password or "demo123",
-            "role": role,
-            "name": name_part or "Demo User",
-            "id": f"{role.lower()}-{raw_email.split('@')[0]}",
-            "email": raw_email,
-        }
-
+    account = DEMO_USERS.get(credentials.email.strip().lower())
+    if not account or not secrets.compare_digest(credentials.password, account["password"]):
+        raise HTTPException(status_code=401, detail="Email or password is incorrect")
     token = secrets.token_urlsafe(32)
-    SESSIONS[token] = {
-        "role": account["role"],
-        "name": account["name"],
-        "id": account["id"],
-        "email": account.get("email", raw_email),
-    }
+    SESSIONS[token] = {key: account[key] for key in ("role", "name", "id")}
     return {"token": token, "user": SESSIONS[token]}
 
 
@@ -174,14 +156,14 @@ class CustomerChatMessage(BaseModel):
 
 @app.get("/api/customer/profile")
 def customer_profile(user=Depends(require_customer)):
-    return {"id": user["id"], "name": user["name"], "email": user.get("email", "ayush@zerotouch.demo"),
+    return {"id": user["id"], "name": user["name"], "email": "vansh@zerotouch.demo",
             "tagline": "Your autonomous payment teammate"}
 
 
 @app.get("/api/customer/transactions")
 def customer_transactions(_user=Depends(require_customer)):
     # Deliberately return only customer-facing fields, never internal risk scores.
-    return [{key: tx[key] for key in ("transaction_id", "amount", "currency", "bank_status", "resolution_status", "workflow_type", "action_id")}
+    return [{key: tx[key] for key in ("transaction_id", "amount", "currency", "bank_status", "network_status", "merchant_status", "settlement_status", "resolution_status", "workflow_type", "action_id")}
             for tx in db_get_all_transactions()]
 
 
@@ -195,7 +177,7 @@ def customer_cases(_user=Depends(require_customer)):
             "case_id": f"ZT-{tx['transaction_id'][-5:]}",
             "transaction_id": tx["transaction_id"], "amount": tx["amount"],
             "status": tx["resolution_status"], "issue": _issue_for(tx),
-            "action_id": tx.get("action_id"), "timeline": db_get_events(tx["transaction_id"]),
+            "action_id": tx.get("action_id"), "timeline": _customer_timeline(db_get_events(tx["transaction_id"])),
         })
     return cases
 
@@ -209,6 +191,24 @@ def _issue_for(tx):
     return {"W1": "Payment investigation", "W2": "Refund follow-up", "W3": "Merchant settlement review"}.get(tx.get("workflow_type"), "Payment support")
 
 
+def _customer_timeline(events):
+    """Expose progress labels, never raw internal audit messages or policy details."""
+    labels = {
+        "investigator_agent_start": "Payment check started", "load_transaction": "Payment identified",
+        "narrative_complete": "Payment records checked", "evaluate_policy": "Resolution options reviewed",
+        "initiate_reversal": "Reversal initiated", "human_approved_reversal": "Reversal approved by support",
+        "verify_resolution": "Payment outcome verified",
+        "chase_bank_sla": "Bank follow-up requested", "offer_wallet_credit": "Refund return processed",
+        "generate_itemized_explanation": "Settlement breakdown prepared", "flag_compliance_hold": "Case sent for review",
+        "create_support_case": "Support team notified", "human_decision": "Support review updated",
+        "send_dynamic_notification": "You were notified", "send_notification": "You were notified",
+        "update_customer_case": "Case status updated",
+    }
+    return [{"timestamp": event.get("timestamp"), "label": labels[event["step"]],
+             "status": "FAILED" if event.get("status") == "FAILED" else "DONE"}
+            for event in events if event.get("step") in labels]
+
+
 @app.post("/api/chat")
 def customer_chat(payload: CustomerChatMessage, user=Depends(require_customer)):
     message = payload.message.strip()
@@ -216,18 +216,41 @@ def customer_chat(payload: CustomerChatMessage, user=Depends(require_customer)):
         raise HTTPException(status_code=422, detail="Message must contain 1–1000 characters")
     transactions = {tx["transaction_id"]: tx for tx in db_get_all_transactions()}
     explicit = re.search(r"\b(?:TX\d{4}|RF\d{3}|S\d{3})\b", message.upper())
-    if explicit and explicit.group(0) in transactions:
-        tx_id = explicit.group(0)
-    elif re.search(r"9[, ]?650|10[, ]?000", message.lower()) or any(word in message.lower() for word in ("settlement", "short settlement")):
+    tx_id = explicit.group(0) if explicit and explicit.group(0) in transactions else None
+    amount_match = re.search(r"(?:₹|rs\.?\s*)?([\d,]+(?:\.\d{1,2})?)", message.lower())
+    if not tx_id and amount_match:
+        requested_amount = float(amount_match.group(1).replace(",", ""))
+        matches = [tx_id for tx_id, tx in transactions.items() if tx["amount"] == requested_amount]
+        if "settlement" in message.lower() or "merchant" in message.lower():
+            matches = [candidate for candidate in matches if transactions[candidate].get("workflow_type") == "W3"] or matches
+        elif "refund" in message.lower():
+            matches = [candidate for candidate in matches if transactions[candidate].get("workflow_type") == "W2"] or matches
+        elif any(word in message.lower() for word in ("payment", "debited", "charged", "deducted", "upi")):
+            matches = [candidate for candidate in matches if transactions[candidate].get("workflow_type") == "W1"] or matches
+        if len(matches) == 1:
+            tx_id = matches[0]
+    if not tx_id and (re.search(r"9[, ]?650|10[, ]?000", message.lower()) or any(word in message.lower() for word in ("settlement", "short settlement"))):
         tx_id = "S301"
-    elif any(word in message.lower() for word in ("bounced", "invalid account", "wallet")):
+    elif not tx_id and any(word in message.lower() for word in ("bounced", "invalid account", "wallet")):
         tx_id = "RF204"
-    elif "refund" in message.lower() and any(word in message.lower() for word in ("late", "missing", "arrived", "where")):
+    elif not tx_id and "refund" in message.lower() and any(word in message.lower() for word in ("late", "missing", "arrived", "where")):
         tx_id = "RF202"
-    elif any(word in message.lower() for word in ("human", "agent", "support person", "high risk")):
+    elif not tx_id and any(word in message.lower() for word in ("human", "agent", "support person", "high risk")):
         tx_id = "TX9342"
-    else:
-        tx_id = "TX9281"
+
+    if tx_id is None:
+        previous_case_tx = next((item.get("transaction_id") for item in reversed(db_get_messages(user["id"]))
+                                 if item.get("transaction_id") in transactions), None)
+        if previous_case_tx and transactions[previous_case_tx]["resolution_status"] in ("PENDING", "ESCALATED"):
+            tx_id = previous_case_tx
+
+    if tx_id is None:
+        db_add_message(user["id"], "customer", message)
+        reply = "I can check that for you. Which recent payment are you asking about?"
+        db_add_message(user["id"], "assistant", reply)
+        options = [{key: tx[key] for key in ("transaction_id", "amount", "currency", "resolution_status", "workflow_type")}
+                   for tx in db_get_all_transactions()[:6]]
+        return {"needs_selection": True, "reply": reply, "options": options}
 
     db_add_message(user["id"], "customer", message, tx_id)
     tx = transactions[tx_id]
@@ -237,7 +260,7 @@ def customer_chat(payload: CustomerChatMessage, user=Depends(require_customer)):
         decision = result.decision
         action_id = result.action_id
         status = result.resolution_status
-        if getattr(result, "dynamic_message", None):
+        if result.dynamic_message:
             reply = result.dynamic_message
         elif decision == "AUTO_REVERSAL":
             reply = f"I investigated {tx_id} across the bank, payment network, merchant ledger and settlement. The bank confirmed your ₹{tx['amount']:,.0f} debit, but the merchant was not credited. The policy engine approved an automatic reversal, and I verified it successfully. Reference: {action_id}."
@@ -258,7 +281,9 @@ def customer_chat(payload: CustomerChatMessage, user=Depends(require_customer)):
         events = db_get_events(tx_id)
         status = tx["resolution_status"]
         action_id = tx.get("action_id")
-        if status == "ESCALATED":
+        if tx.get("dynamic_message"):
+            reply = tx["dynamic_message"]
+        elif status == "ESCALATED":
             reply = f"Case ZT-{tx_id[-5:]} is awaiting human review. No automatic refund has been issued."
         else:
             reply = f"Case ZT-{tx_id[-5:]} is already {status.lower().replace('_', ' ')}. {('Action reference: ' + action_id + '.') if action_id else 'No further action is required.'}"
@@ -269,11 +294,28 @@ def customer_chat(payload: CustomerChatMessage, user=Depends(require_customer)):
         "case_id": f"ZT-{tx_id[-5:]}",
         "status": status,
         "reply": reply,
-        "events": events,
-        "activity": [{"type": event.get("type"), "step": event.get("step"),
-                      "status": event.get("status"), "message": event.get("message")}
-                     for event in events],
+        # Internal ledger evidence, risk scores, policy metadata and traces stay in Ops.
+        "activity": _customer_timeline(events),
     }
+
+
+@app.get("/api/ops/cases")
+def ops_cases(_user=Depends(require_admin)):
+    """Return operational views over the same transaction, audit, and message rows."""
+    return [{"case_id": f"ZT-{tx['transaction_id'][-5:]}", "transaction": tx,
+             "timeline": db_get_events(tx["transaction_id"]),
+             "conversation": db_get_messages_for_transaction(tx["transaction_id"])}
+            for tx in db_get_all_transactions()]
+
+
+@app.get("/api/ops/cases/{tx_id}")
+def ops_case(tx_id: str, _user=Depends(require_admin)):
+    tx = db_get_transaction(tx_id)
+    if not tx:
+        raise HTTPException(status_code=404, detail=f"Transaction {tx_id} not found")
+    return {"case_id": f"ZT-{tx_id[-5:]}", "transaction": tx,
+            "timeline": db_get_events(tx_id),
+            "conversation": db_get_messages_for_transaction(tx_id)}
 
 
 @app.post("/api/resolutions/{tx_id}/human-decision")
@@ -323,8 +365,7 @@ def human_decision(tx_id: str, decision: HumanDecision, _user=Depends(require_ad
         "REJECT": f"A support agent reviewed case ZT-{tx_id[-5:]}. No refund was issued; the case is closed without a payment action.",
         "REQUEST_MORE_INFO": f"A support agent is reviewing case ZT-{tx_id[-5:]} and needs more information before deciding. Please reply here with any details that may help.",
     }
-    for cid in ("cust-ayush", "cust-vansh"):
-        db_add_message(cid, "assistant", customer_updates[decision.action], tx_id)
+    db_add_message("cust-vansh", "assistant", customer_updates[decision.action], tx_id)
     db_add_event(tx_id, "NOTIFICATION", "update_customer_case", "SUCCESS",
                  "Customer conversation updated with the human review outcome")
 

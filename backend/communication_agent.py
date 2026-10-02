@@ -95,19 +95,28 @@ def _gemini_compose_message(
 
     client = genai.Client(api_key=api_key)
 
-    prompt = f"""You are Paytm's Senior Customer Experience AI. Write a real-time, highly personalized SMS and in-app notification for a customer whose transaction encountered an issue.
+    customer_outcomes = {
+        "AUTO_REVERSAL": "A reversal was initiated and independently verified.",
+        "HUMAN_ESCALATION": "The payment needs a support specialist to review it. No automatic refund was issued.",
+        "SLA_CHASE": "A follow-up was sent to the bank because the refund is taking longer than expected.",
+        "WALLET_CREDIT_OFFER": "The refund could not return to its destination account; the wallet resolution flow was started.",
+        "ITEMIZED_EXPLANATION": "The settlement was reconciled and an itemized breakdown was sent.",
+        "COMPLIANCE_HOLD": "The payout needs a support team review before it can proceed.",
+        "NO_ACTION": "The payment records match and no additional payment action was needed.",
+    }
+    safe_outcome = customer_outcomes.get(decision, "The payment status has been reviewed by our support team.")
+
+    prompt = f"""You are Paytm's customer support communication agent. Explain this completed workflow outcome in a clear, empathetic message.
 
 CUSTOMER DETAILS:
 - Name: {customer_name}
 - First-Time Paytm User: {"YES (this is their very first payment on Paytm!)" if is_first_time else "No (regular user)"}
-- CIBIL Credit Score: {cibil}
 
-TRANSACTION & RESOLUTION CONTEXT:
+CUSTOMER-SAFE CASE SUMMARY:
 - Transaction ID: {tx_id}
 - Amount: ₹{amount:,.0f}
-- ZeroTouch Decision: {decision}
+- Outcome: {safe_outcome}
 - Action Reference ID: {action_id}
-- Root Cause / Reason: {reason}
 
 GUIDELINES:
 1. STRICTLY NO GENERIC PRE-BUILT BOILERPLATE.
@@ -115,7 +124,8 @@ GUIDELINES:
 3. If this is a First-Time User, explicitly acknowledge their first transaction with Paytm and reassure them that their money is 100% safe.
 4. Clearly state what happened to their payment in simple terms (e.g. money debited from bank but merchant uncredited).
 5. Specify the exact amount (₹{amount:,.0f}) and the action taken (e.g. Instant refund initiated or wallet credit applied with reference {action_id}).
-6. Keep the tone warm, empathetic, and professional. Length: 40 to 65 words max.
+6. Never mention internal scores, risk signals, policy rules, agent traces, or internal notes.
+7. Keep the tone warm, empathetic, and professional. Length: 40 to 65 words max.
 
 Generate ONLY the customer notification message text."""
 

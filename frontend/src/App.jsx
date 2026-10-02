@@ -10,7 +10,7 @@ import AgentTrace from './components/AgentTrace';
 import HITLQueue  from './components/HITLQueue';
 import ClientExperienceView from './components/ClientExperienceView';
 import UserRolesModal from './components/UserRolesModal';
-import { getTransactions, runResolution, resetDemo, getEvents, getAdminAuditLogs } from './api';
+import { getTransactions, runResolution, resetDemo, getEvents, getAdminAuditLogs, getOpsCase } from './api';
 import { getCurrentUser, logout } from './api';
 import LoginScreen from './components/LoginScreen';
 import CustomerPortal from './components/CustomerPortal';
@@ -280,6 +280,17 @@ function SlidePanel({ open, onClose, title, children, badge, width = "w-[540px]"
 function TxDetailPanel({ tx, events, result, isRunning, onRun, onClose }) {
   if (!tx) return null;
   const [tab, setTab] = useState('details');
+  const [caseConversation, setCaseConversation] = useState([]);
+  useEffect(() => {
+    if (tab !== 'conversation') return undefined;
+    let active = true;
+    const load = () => getOpsCase(tx.transaction_id).then(data => {
+      if (active) setCaseConversation(data.conversation || []);
+    }).catch(() => {});
+    load();
+    const timer = window.setInterval(load, 3000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [tab, tx.transaction_id]);
 
   const fields = [
     ['Transaction ID', tx.transaction_id],
@@ -304,6 +315,7 @@ function TxDetailPanel({ tx, events, result, isRunning, onRun, onClose }) {
       <div className="flex border-b border-slate-100 shrink-0 bg-slate-50/50">
         {[
           { id: 'details', label: 'Details' },
+          { id: 'conversation', label: 'Customer Chat' },
           { id: 'trace',   label: 'Agent Trace' },
           { id: 'client',  label: 'Client Impact' },
           { id: 'hitl',   label: 'HITL' },
@@ -382,6 +394,13 @@ function TxDetailPanel({ tx, events, result, isRunning, onRun, onClose }) {
         <AgentTrace events={events} result={result} isRunning={isRunning}/>
       )}
 
+      {tab === 'conversation' && (
+        <div className="flex-1 overflow-y-auto bg-slate-50 p-4">
+          <div className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">Shared case · ZT-{tx.transaction_id.slice(-5)} · {tx.transaction_id}</div>
+          {caseConversation.length === 0 ? <p className="rounded-xl border border-dashed border-slate-300 bg-white p-5 text-xs text-slate-500">No customer messages for this case yet. This view refreshes automatically.</p> : <div className="space-y-3">{caseConversation.map((item, index) => <div key={item.id || `${item.created_at}-${index}`} className={`rounded-xl border p-3 ${item.role === 'customer' ? 'border-blue-100 bg-blue-50' : 'border-slate-200 bg-white'}`}><div className="mb-1 flex justify-between text-[10px] font-bold uppercase tracking-wide text-slate-500"><span>{item.role === 'customer' ? 'Customer' : 'ZeroTouch'}</span><time>{item.created_at ? new Date(item.created_at).toLocaleString() : ''}</time></div><p className="whitespace-pre-wrap text-xs leading-5 text-slate-700">{item.content}</p></div>)}</div>}
+        </div>
+      )}
+
       {tab === 'client' && (
         <div className="flex-1 overflow-hidden">
           <ClientExperienceView selectedTxId={tx.transaction_id} result={result} />
@@ -430,7 +449,11 @@ function OperationsConsole({ onLogout }) {
     }
   }, []);
 
-  useEffect(() => { loadTx(); }, [loadTx]);
+  useEffect(() => {
+    loadTx();
+    const timer = window.setInterval(loadTx, 4000);
+    return () => window.clearInterval(timer);
+  }, [loadTx]);
   useEffect(() => {
     if (activeNav === 'audit_logs') getAdminAuditLogs().then(setAuditLogs).catch(e => setError(e.message));
   }, [activeNav]);

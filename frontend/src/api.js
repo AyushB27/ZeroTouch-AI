@@ -35,6 +35,7 @@ export const getCustomerCases = () => request('/customer/cases');
 export const getCustomerMessages = () => request('/customer/messages');
 export const sendChat = message => request('/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }) });
 export const getAdminAuditLogs = () => request('/admin/audit-logs');
+export const getOpsCase = txId => request(`/ops/cases/${encodeURIComponent(txId)}`);
 
 export async function getTransactions() {
   return request('/transactions');

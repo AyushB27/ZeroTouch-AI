@@ -211,3 +211,12 @@ def db_get_messages(customer_id: str):
             .where(conversation_messages_table.c.customer_id == customer_id)
             .order_by(conversation_messages_table.c.id)).mappings().all()
         return [dict(row) for row in rows]
+
+
+def db_get_messages_for_transaction(transaction_id: str):
+    """Return the persisted conversation attached to one transaction-backed case."""
+    with engine.connect() as conn:
+        rows = conn.execute(conversation_messages_table.select()
+            .where(conversation_messages_table.c.transaction_id == transaction_id)
+            .order_by(conversation_messages_table.c.id)).mappings().all()
+        return [dict(row) for row in rows]
