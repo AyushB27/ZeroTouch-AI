@@ -1,13 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { RefreshCw, Play, CheckCircle2, Loader2, WifiOff, Shield } from 'lucide-react';
-import ScenarioSelector from './components/ScenarioSelector';
-import TransactionHeader from './components/TransactionHeader';
-import SystemStatus from './components/SystemStatus';
+import { RefreshCw, Play, CheckCircle2, Loader2, WifiOff, Shield, Smartphone } from 'lucide-react';
 import AgentTimeline from './components/AgentTimeline';
-import ResolutionPanel from './components/ResolutionPanel';
-import EvidencePanel from './components/EvidencePanel';
-import EscalationPanel from './components/EscalationPanel';
-import InvestigationNarrative from './components/InvestigationNarrative';
+import PhoneMockup from './components/PhoneMockup';
+import SupportConsole from './components/SupportConsole';
 import { getTransaction, runResolution, getEvents, resetDemo } from './api';
 
 const TX_IDS = ['TX9281', 'TX9342', 'TX9410'];
@@ -134,108 +129,106 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans pb-20">
+    <div className="min-h-screen bg-paytm-light text-slate-900 font-sans flex flex-col h-screen overflow-hidden">
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
+      <header className="bg-paytm-dark border-b border-paytm-dark shadow-sm z-10 shrink-0">
+        <div className="max-w-[1400px] mx-auto px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-7 h-7 rounded-lg bg-blue-600 flex items-center justify-center">
-              <Shield size={14} className="text-white" />
+            <div className="w-8 h-8 rounded bg-white flex items-center justify-center">
+              <Shield size={18} className="text-paytm-primary" />
             </div>
             <div>
-              <span className="font-bold text-slate-900 text-sm tracking-tight">ZERO TOUCH</span>
-              <span className="text-slate-400 text-xs ml-2">Payment Resolution Teammate</span>
+              <span className="font-bold text-white text-lg tracking-tight">ZeroTouch</span>
+              <span className="text-paytm-primary text-xs ml-2 font-medium">Autonomous Agent</span>
             </div>
           </div>
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-1.5">
-              <div className="w-2 h-2 rounded-full bg-emerald-400 pulse-dot" />
-              <span className="text-xs font-semibold text-slate-600">AUTONOMOUS MODE</span>
+            <div className="flex items-center gap-1.5 bg-white/10 px-3 py-1 rounded-full">
+              <div className="w-2 h-2 rounded-full bg-paytm-green animate-pulse" />
+              <span className="text-xs font-semibold text-white tracking-wide">AUTONOMOUS MODE</span>
             </div>
             <button 
               onClick={handleReset}
               disabled={isResetting || isRunning}
-              className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-800 border border-slate-200 rounded-lg px-3 py-1.5 hover:bg-slate-50 transition-colors disabled:opacity-50"
+              className="flex items-center gap-1.5 text-xs text-white hover:text-white border border-white/20 rounded hover:bg-white/10 px-3 py-1.5 transition-colors disabled:opacity-50"
             >
               <RefreshCw size={12} className={isResetting ? 'animate-spin' : ''} />
-              RESET DEMO
+              RESET
             </button>
           </div>
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-6 py-6 space-y-5">
-        {/* Scenario Selector */}
-        <ScenarioSelector selected={selectedTx} onSelect={handleSelectScenario} />
+      {/* Main Content Area */}
+      <main className="flex-1 flex flex-col max-w-[1400px] mx-auto w-full px-6 py-4 gap-4 overflow-hidden">
+        
+        {/* Scenario Selector & Demo Control Panel */}
+        <div className="shrink-0 bg-white rounded-xl border border-slate-200 p-4 shadow-sm flex items-center justify-between">
+          <div className="flex gap-2 flex-1">
+            <div className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center mr-2">Demo Injector</div>
+            {['TX9281', 'TX9342', 'TX9410'].map(tx => (
+              <button
+                key={tx}
+                onClick={() => handleSelectScenario(tx)}
+                className={`px-4 py-2 text-sm font-semibold rounded transition-colors ${
+                  selectedTx === tx 
+                  ? 'bg-paytm-primary text-white shadow-sm' 
+                  : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
+                }`}
+              >
+                Fire {tx}
+              </button>
+            ))}
+          </div>
+
+          <button
+            onClick={handleRun}
+            disabled={!canRun}
+            className={`flex items-center gap-2 px-6 py-2 rounded text-sm font-bold tracking-wide transition-all ${
+              isRunning 
+                ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                : 'bg-paytm-dark hover:bg-paytm-dark/90 text-white shadow-md active:scale-95'
+            } disabled:opacity-50 disabled:cursor-not-allowed`}
+          >
+            {isRunning ? (
+              <><Loader2 size={16} className="animate-spin" /> EXECUTING...</>
+            ) : isAlreadyResolved ? (
+              <><CheckCircle2 size={16} /> COMPLETED</>
+            ) : (
+              <><Play size={16} /> TRIGGER EVENT</>
+            )}
+          </button>
+        </div>
 
         {error && (
-          <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">
+          <div className="shrink-0 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">
             {error}
           </div>
         )}
 
-        {/* Transaction Header */}
-        <TransactionHeader transaction={transaction} />
+        {/* Three Column Layout */}
+        <div className="flex-1 flex gap-4 min-h-0">
+          
+          {/* Left: Phone Mockup (35%) */}
+          <div className="w-[35%] flex flex-col items-center justify-center bg-white rounded-xl border border-slate-200 p-4 overflow-y-auto">
+             <div className="w-full mb-4 flex items-center gap-2">
+               <Smartphone size={16} className="text-paytm-primary" />
+               <span className="text-sm font-bold text-slate-700">Customer App View</span>
+             </div>
+             {/* PhoneMockup Component */}
+             <PhoneMockup transaction={transaction} result={result} />
+          </div>
 
-        {/* System Status */}
-        <SystemStatus transaction={transaction} />
-
-        {/* Layer 3 — Agent Investigation Narrative */}
-        {result?.investigation_narrative && (
-          <InvestigationNarrative 
-            narrative={result.investigation_narrative} 
-            agentPowered={result.agent_powered}
-          />
-        )}
-
-        {/* Main Grid */}
-        <div className="grid grid-cols-3 gap-5">
-          {/* Left: Agent Timeline */}
-          <div className="col-span-2">
+          {/* Center: Agent Trace (30%) */}
+          <div className="w-[30%] flex flex-col min-h-0">
             <AgentTimeline events={events} isRunning={isRunning} />
           </div>
-          {/* Right: Resolution */}
-          <div className="space-y-5">
-            <ResolutionPanel result={result} />
+
+          {/* Right: Support Console (35%) */}
+          <div className="w-[35%] flex flex-col min-h-0">
+            <SupportConsole result={result} isRunning={isRunning} />
           </div>
-        </div>
-
-        {/* Evidence */}
-        {(result?.evidence) && (
-          <EvidencePanel evidence={result.evidence} />
-        )}
-
-        {/* Escalation */}
-        {result && result.resolution_status === 'ESCALATED' && (
-          <EscalationPanel result={result} />
-        )}
-
-        {/* CTA */}
-        <div className="flex justify-center pb-4">
-          {isAlreadyResolved ? (
-            <div className="flex items-center gap-2 px-6 py-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-700 text-sm font-semibold">
-              <CheckCircle2 size={16} />
-              {transaction.resolution_status === 'RESOLVED' ? 'RESOLUTION COMPLETE' : 
-               transaction.resolution_status === 'NO_ACTION' ? 'NO ACTION REQUIRED' : 
-               'ESCALATED TO HUMAN'}
-            </div>
-          ) : (
-            <button
-              onClick={handleRun}
-              disabled={!canRun}
-              className={`flex items-center gap-2.5 px-8 py-3.5 rounded-xl text-sm font-bold tracking-wide transition-all ${
-                isRunning 
-                  ? 'bg-blue-100 text-blue-600 border border-blue-200 cursor-not-allowed'
-                  : 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm hover:shadow-md active:scale-95'
-              } disabled:opacity-50 disabled:cursor-not-allowed`}
-            >
-              {isRunning ? (
-                <><Loader2 size={16} className="animate-spin" /> RESOLUTION IN PROGRESS</>
-              ) : (
-                <><Play size={16} /> RUN RESOLUTION</>
-              )}
-            </button>
-          )}
+          
         </div>
       </main>
     </div>

@@ -7,18 +7,13 @@ export default {
   theme: {
     extend: {
       colors: {
-        navy: {
-          50: '#f0f4ff',
-          100: '#dbe4ff',
-          200: '#bfcfff',
-          300: '#93abff',
-          400: '#6080ff',
-          500: '#3355ff',
-          600: '#1a33f5',
-          700: '#1328e0',
-          800: '#1522b5',
-          900: '#172191',
-          950: '#111457',
+        paytm: {
+          primary: '#00baf2', // Paytm Light Blue
+          dark: '#002970',    // Paytm Dark Blue
+          light: '#f0f8ff',   // Soft blue background
+          green: '#21c17a',   // Paytm Success Green
+          red: '#ff585d',     // Paytm Error Red
+          yellow: '#ffa900',  // Paytm Warning Yellow
         },
       },
     },

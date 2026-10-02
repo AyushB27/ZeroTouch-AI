@@ -1,4 +1,4 @@
-"""
+﻿"""
 Layer 3 — AI Resolution Agent
 Observes payment system states, investigates the discrepancy, and produces
 a human-readable investigation narrative.
@@ -66,11 +66,19 @@ def _gemini_tool_investigate(tx_id: str, tx: dict, log_func, api_key: str) -> st
         log_func("INVESTIGATION", "check_settlement", "SUCCESS", f"Settlement status retrieved by AI: {res['status']}")
         return res
 
+    def tool_search_policy(query: str) -> str:
+        """Search the internal Paytm knowledge base and policy rules."""
+        from backend.rag import search_policy
+        res = search_policy(query)
+        log_func("INVESTIGATION", "search_policy", "SUCCESS", f"AI queried policy KB: {query}")
+        return res
+
     tools = [
         tool_check_bank_status,
         tool_check_network_status,
         tool_check_merchant_ledger,
-        tool_check_settlement
+        tool_check_settlement,
+        tool_search_policy
     ]
 
     prompt = f"""You are ZeroTouch, an autonomous payment resolution agent investigating a payment exception.
@@ -82,10 +90,11 @@ Prior Refund on Record: {"Yes" if tx['previous_refund'] else "No"}
 
 Your task:
 1. Use your tools to check the status of this transaction across all 4 systems (Bank, Network, Merchant, Settlement). You must call all 4 tools.
-2. Once you have all the results, write a concise investigation summary in exactly 2-3 sentences that:
+2. Use the `tool_search_policy` tool to look up the relevant rule or SLA based on what you find.
+3. Once you have all the results and policy context, write a concise investigation summary in exactly 3-4 sentences that:
    - States what happened to the customer's money based on the bank status.
    - Identifies the specific discrepancy found across the four payment systems.
-   - States what this means and what follow-up action is warranted.
+   - States the exact policy rule that applies to this situation based on your policy search.
 
 Be precise and factual. Use plain English. Do not recommend or authorize a refund — that decision belongs to the policy engine."""
 

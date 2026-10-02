@@ -7,6 +7,8 @@ import copy
 from dotenv import load_dotenv
 load_dotenv()  # loads backend/.env if present
 
+from backend.rag import init_rag
+
 app = FastAPI(title="ZeroTouch Payment Resolution Engine", version="1.0.0")
 
 app.add_middleware(
@@ -17,6 +19,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Initialize RAG on boot
+init_rag()
 
 @app.get("/")
 def health():
