@@ -36,3 +36,8 @@ When a merchant settlement batch is less than the expected ledger amount.
 
 **Rule 3.1: Fees and Deductions**
 Explainable gaps (like standard platform fees, GST, or netted refunds) do not require escalation. An itemized explanation can be generated and sent to the merchant.
+**Rule 2.3: Invalid Destination Account**
+If a refund bounces because the destination bank account or card is closed/invalid, the agent MUST offer a credit to the customer's Paytm Wallet via an in-app consent prompt. If consent is absent, escalate to human.
+
+**Rule 3.2: KYC or Compliance Holds**
+If a merchant settlement is held because their KYC document expired or they triggered a compliance risk flag, the agent MUST NOT release the funds. Route immediately to compliance and inform the merchant exactly what document is needed.

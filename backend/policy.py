@@ -1,12 +1,14 @@
+"""
+Extended policy engine — covers W1, W2, and W3 scenarios.
+The LLM never makes financial decisions. All branching is rule-based.
+"""
 from backend.models import Evidence, PolicyDecision
 
 
 def evaluate_policy(evidence: Evidence) -> PolicyDecision:
-    """Deterministic policy engine. The LLM never makes financial decisions."""
-
     tx = evidence
 
-    # Scenario: consistent successful transaction — no action needed
+    # ── W1: Consistent transaction ────────────────────────────────────────────
     if (
         tx.bank == "DEBITED"
         and tx.network == "SUCCESS"
@@ -19,7 +21,7 @@ def evaluate_policy(evidence: Evidence) -> PolicyDecision:
             reason="Transaction is consistent across all systems. No anomaly detected.",
         )
 
-    # Scenario: safe auto-reversal
+    # ── W1: Clean auto-reversal ───────────────────────────────────────────────
     if (
         tx.bank == "DEBITED"
         and tx.network == "SUCCESS"
@@ -39,25 +41,94 @@ def evaluate_policy(evidence: Evidence) -> PolicyDecision:
             ),
         )
 
-    # Conflicting states — never automatically reverse
+    # ── W2: SLA breached — bank acknowledged refund but not yet credited ──────
+    if (
+        tx.bank == "ACKNOWLEDGED"
+        and tx.network == "SLA_BREACHED"
+        and tx.merchant == "REVERSED"
+        and tx.settlement == "PENDING_CREDIT"
+    ):
+        return PolicyDecision(
+            decision="SLA_CHASE",
+            authorized=True,
+            reason=(
+                "Refund was acknowledged by the bank but has not credited to the customer "
+                "within the 5-day SLA window. Autonomous bank escalation API triggered per Rule 2.2."
+            ),
+        )
+
+    # ── W2: Invalid destination — bounce → offer wallet credit ────────────────
+    if (
+        tx.bank in ("BOUNCED_INVALID_ACCOUNT", "BOUNCED")
+        and tx.network in ("FAILED_RETURN", "FAILED")
+        and tx.merchant == "REVERSED"
+        and tx.settlement == "FAILED"
+    ):
+        return PolicyDecision(
+            decision="WALLET_CREDIT_OFFER",
+            authorized=True,
+            reason=(
+                "Refund bounced because the destination bank account or card is invalid. "
+                "Per Rule 2.3: credit the equivalent amount to the customer's Paytm Wallet."
+            ),
+        )
+
+    # ── W3: Merchant settlement shortfall explainable by fees ────────────────
+    if (
+        tx.bank == "SETTLED_TO_NODAL"
+        and tx.network == "SUCCESS"
+        and tx.merchant.startswith("FEE_DEDUCTION")
+        and tx.settlement.startswith("PARTIAL_SETTLED")
+        and tx.risk < 0.10
+    ):
+        try:
+            fee = float(tx.merchant.split("_")[-1])
+        except ValueError:
+            fee = 0.0
+        return PolicyDecision(
+            decision="ITEMIZED_EXPLANATION",
+            authorized=True,
+            reason=(
+                f"Merchant settlement shortfall of Rs.{fee:.0f} is fully explained by "
+                "standard platform fees and GST. Per Rule 3.1: generate itemized breakdown "
+                "and notify merchant. No ticket required."
+            ),
+        )
+
+    # ── W3: KYC / compliance hold — never auto-release ───────────────────────
+    if "HELD_KYC" in tx.settlement or "COMPLIANCE" in tx.settlement or tx.risk >= 0.85:
+        return PolicyDecision(
+            decision="COMPLIANCE_HOLD",
+            authorized=False,
+            reason=(
+                "Settlement is held due to expired KYC or compliance risk flag. "
+                "Per Rule 3.2: funds MUST NOT be released autonomously. "
+                "Routing to compliance team immediately."
+            ),
+        )
+
+    # ── W1: Conflicting states ────────────────────────────────────────────────
     if tx.bank == "DEBITED" and tx.network == "FAILED" and tx.merchant == "CREDITED":
         return PolicyDecision(
             decision="HUMAN_ESCALATION",
             authorized=False,
-            reason="Conflicting transaction states detected. Bank debited but network failed while merchant shows credit. Manual investigation required.",
+            reason=(
+                "Conflicting transaction states detected. Bank debited but network failed "
+                "while merchant shows credit. Manual investigation required."
+            ),
         )
 
-    # Default: escalate for any ambiguous or high-risk case
+    # ── Default: escalate any ambiguous / high-risk case ─────────────────────
     reasons = []
-    if tx.network == "UNKNOWN":
+    if tx.network in ("UNKNOWN", "SLA_BREACHED"):
         reasons.append("network status could not be confirmed")
-    if tx.settlement == "UNKNOWN":
+    if tx.settlement in ("UNKNOWN",):
         reasons.append("settlement status is unresolved")
     if tx.risk >= 0.30:
         reasons.append(f"risk score {tx.risk:.2f} exceeds autonomous action threshold (0.30)")
-    if tx.amount > 5000:
-        reasons.append(f"amount \u20b9{tx.amount:.0f} exceeds autonomous action limit (\u20b95,000)")
-    if tx.previous_refund:
+    if tx.amount > 5000 and tx.bank == "DEBITED" and tx.merchant == "NOT_CREDITED":
+        reasons.append(f"amount Rs.{tx.amount:.0f} exceeds autonomous action limit (Rs.5,000)")
+    if tx.previous_refund and tx.bank == "DEBITED" and tx.merchant == "NOT_CREDITED":
         reasons.append("previous refund already issued for this transaction")
 
     reason_str = "Payment state could not be conclusively reconciled. " + (

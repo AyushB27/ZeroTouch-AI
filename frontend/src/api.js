@@ -32,3 +32,16 @@ export async function resetDemo() {
   if (!res.ok) throw new Error('Reset failed');
   return res.json();
 }
+
+export async function submitHumanDecision(txId, action, agentName, notes) {
+  const res = await fetch(`${BASE}/resolutions/${txId}/human-decision`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, agent_name: agentName, notes }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
+    throw new Error(err.detail || 'Decision submission failed');
+  }
+  return res.json();
+}

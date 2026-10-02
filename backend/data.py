@@ -1,8 +1,15 @@
-import copy
-from datetime import datetime
+"""
+Seed data for the ZeroTouch demo.
 
-# Original seed data - never mutate this
+This module is the single source of truth for ORIGINAL_TRANSACTIONS.
+The database.py seeder reads from here and inserts rows on first boot.
+The in-memory TRANSACTIONS dict is kept for legacy compatibility only
+(some older tools still reference it as a fallback).
+"""
+import copy
+
 ORIGINAL_TRANSACTIONS = {
+    # ── Workflow 1: Failed / Stuck Payment ──────────────────────────────────
     "TX9281": {
         "transaction_id": "TX9281",
         "amount": 2500.0,
@@ -15,6 +22,7 @@ ORIGINAL_TRANSACTIONS = {
         "previous_refund": False,
         "action_id": None,
         "resolution_status": "PENDING",
+        "workflow_type": "W1",
     },
     "TX9342": {
         "transaction_id": "TX9342",
@@ -28,6 +36,7 @@ ORIGINAL_TRANSACTIONS = {
         "previous_refund": False,
         "action_id": None,
         "resolution_status": "PENDING",
+        "workflow_type": "W1",
     },
     "TX9410": {
         "transaction_id": "TX9410",
@@ -41,22 +50,78 @@ ORIGINAL_TRANSACTIONS = {
         "previous_refund": False,
         "action_id": None,
         "resolution_status": "PENDING",
+        "workflow_type": "W1",
+    },
+    # ── Workflow 2: Refund SLA Chasing ──────────────────────────────────────
+    "RF202": {
+        "transaction_id": "RF202",
+        "amount": 1800.0,
+        "currency": "INR",
+        "bank_status": "ACKNOWLEDGED",
+        "network_status": "SLA_BREACHED",
+        "merchant_status": "REVERSED",
+        "settlement_status": "PENDING_CREDIT",
+        "risk_score": 0.05,
+        "previous_refund": True,
+        "action_id": None,
+        "resolution_status": "PENDING",
+        "workflow_type": "W2",
+    },
+    "RF204": {
+        "transaction_id": "RF204",
+        "amount": 2500.0,
+        "currency": "INR",
+        "bank_status": "BOUNCED_INVALID_ACCOUNT",
+        "network_status": "FAILED_RETURN",
+        "merchant_status": "REVERSED",
+        "settlement_status": "FAILED",
+        "risk_score": 0.10,
+        "previous_refund": True,
+        "action_id": None,
+        "resolution_status": "PENDING",
+        "workflow_type": "W2",
+    },
+    # ── Workflow 3: Merchant Settlement Mismatch ────────────────────────────
+    "S302": {
+        "transaction_id": "S302",
+        "amount": 50000.0,
+        "currency": "INR",
+        "bank_status": "SETTLED_TO_NODAL",
+        "network_status": "SUCCESS",
+        "merchant_status": "FEE_DEDUCTION_1000",
+        "settlement_status": "PARTIAL_SETTLED_49000",
+        "risk_score": 0.02,
+        "previous_refund": False,
+        "action_id": None,
+        "resolution_status": "PENDING",
+        "workflow_type": "W3",
+    },
+    "S306": {
+        "transaction_id": "S306",
+        "amount": 45000.0,
+        "currency": "INR",
+        "bank_status": "HELD",
+        "network_status": "SUCCESS",
+        "merchant_status": "EXPECTING_CREDIT",
+        "settlement_status": "HELD_KYC_EXPIRED",
+        "risk_score": 0.88,
+        "previous_refund": False,
+        "action_id": None,
+        "resolution_status": "PENDING",
+        "workflow_type": "W3",
     },
 }
 
-# Mutable working copy
+# Mutable working copy (used by legacy tool imports as fallback)
 TRANSACTIONS = copy.deepcopy(ORIGINAL_TRANSACTIONS)
-
-# Audit event store per transaction
 AUDIT_EVENTS: dict = {tx_id: [] for tx_id in ORIGINAL_TRANSACTIONS}
 
 
 def reset_all():
-    fresh = copy.deepcopy(ORIGINAL_TRANSACTIONS)
-    TRANSACTIONS.clear()
-    TRANSACTIONS.update(fresh)
-    AUDIT_EVENTS.clear()
-    AUDIT_EVENTS.update({tx_id: [] for tx_id in ORIGINAL_TRANSACTIONS})
+    """Legacy reset — real reset goes through database.db_reset_all()."""
+    global TRANSACTIONS, AUDIT_EVENTS
+    TRANSACTIONS = copy.deepcopy(ORIGINAL_TRANSACTIONS)
+    AUDIT_EVENTS = {tx_id: [] for tx_id in ORIGINAL_TRANSACTIONS}
 
 
 def add_event(tx_id: str, event_type: str, step: str, status: str, message: str):

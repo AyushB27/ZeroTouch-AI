@@ -1,84 +1,93 @@
-from datetime import datetime, timezone
-from backend.data import TRANSACTIONS, AUDIT_EVENTS, add_event
-from backend.models import Evidence, ResolutionResult, AuditEvent
+"""
+LangGraph Stateful Orchestration for ZeroTouch.
+
+Replaces the old linear run_resolution() function with a proper
+directed state graph:
+
+    [start]
+       |
+    [investigate]  <- AI agent (Gemini Function Calling + RAG)
+       |
+    [policy]       <- Deterministic policy engine (no LLM)
+       |
+    [route] ──────> AUTO_REVERSAL     -> [act_reverse]  -> [verify] -> [notify] -> [close]
+               ├──> SLA_CHASE         -> [act_sla]      -> [notify] -> [close]
+               ├──> WALLET_CREDIT     -> [act_wallet]   -> [notify] -> [close]
+               ├──> ITEMIZED_EXPL     -> [act_itemize]  -> [close]
+               ├──> COMPLIANCE_HOLD   -> [act_hold]     -> [escalate]
+               ├──> HUMAN_ESCALATION  -> [escalate]
+               └──> NO_ACTION         -> [close]
+"""
+
+import operator
+from typing import TypedDict, List, Optional, Annotated
+
+from langgraph.graph import StateGraph, END
+
+from backend.models import Evidence, AuditEvent, ResolutionResult, PolicyDecision
 from backend.policy import evaluate_policy
-from backend.tools.bank import check_bank_status
-from backend.tools.network import check_network_status
-from backend.tools.merchant import check_merchant_ledger
-from backend.tools.settlement import check_settlement
+from backend.database import (
+    db_get_transaction, db_update_transaction, db_add_event, db_get_events
+)
 from backend.tools.actions import initiate_reversal, verify_resolution
 from backend.tools.notifications import send_customer_notification, create_support_case
+from backend.tools.w2_w3_actions import (
+    chase_bank_sla, offer_wallet_credit,
+    generate_itemized_explanation, flag_compliance_hold,
+)
 from backend.agent import investigate_transaction
 
 
-def run_resolution(tx_id: str) -> ResolutionResult:
-    tx = TRANSACTIONS.get(tx_id)
-    if not tx:
-        raise ValueError(f"Transaction {tx_id} not found")
+# ── State schema ──────────────────────────────────────────────────────────────
 
-    # --- IDEMPOTENCY GUARD ---
-    # If already processed, replay existing result without re-executing
-    if tx["resolution_status"] != "PENDING":
-        existing_events = [AuditEvent(**e) for e in AUDIT_EVENTS.get(tx_id, [])]
-        evidence = Evidence(
-            transaction_id=tx_id,
-            bank=tx["bank_status"],
-            network=tx["network_status"],
-            merchant=tx["merchant_status"],
-            settlement=tx["settlement_status"],
-            amount=tx["amount"],
-            risk=tx["risk_score"],
-            previous_refund=tx["previous_refund"],
-        )
-        status = tx["resolution_status"]
-        return ResolutionResult(
-            transaction_id=tx_id,
-            decision=("AUTO_REVERSAL" if status == "RESOLVED"
-                      else "HUMAN_ESCALATION" if status == "ESCALATED"
-                      else "NO_ACTION"),
-            authorized=(status == "RESOLVED"),
-            action_id=tx.get("action_id"),
-            verification_status=("VERIFIED" if status == "RESOLVED" else None),
-            notification_sent=(status == "RESOLVED"),
-            support_case=(f"CASE-ZT{tx_id[2:]}" if status == "ESCALATED" else None),
-            resolution_status=status,
-            events=existing_events,
-            evidence=evidence,
-            escalation_reason=("Transaction was previously escalated." if status == "ESCALATED" else None),
-            suggested_resolution=None,
-            investigation_narrative="[Cached from previous run] " + (
-                "The customer was debited, but the payment network and merchant ledger show inconsistencies." 
-                if status == "AUTO_REVERSAL" else "Investigation details have been escalated."
-            ),
-            agent_powered=False,
-        )
+class ResolutionState(TypedDict):
+    tx_id: str
+    tx: dict
+    events: Annotated[List[dict], operator.add]   # append-only list
+    evidence: Optional[dict]
+    policy: Optional[dict]                         # PolicyDecision as dict
+    action_id: Optional[str]
+    verification_status: Optional[str]
+    notification_sent: bool
+    support_case: Optional[str]
+    escalation_reason: Optional[str]
+    suggested_resolution: Optional[str]
+    investigation_narrative: Optional[str]
+    resolution_status: str                         # final status
 
-    events = AUDIT_EVENTS.setdefault(tx_id, [])
 
-    def log(event_type, step, status, message):
-        e = add_event(tx_id, event_type, step, status, message)
+# ── Helper ────────────────────────────────────────────────────────────────────
+
+def _log(state: ResolutionState, event_type, step, status, message) -> dict:
+    e = db_add_event(state["tx_id"], event_type, step, status, message)
+    return e
+
+
+def _make_log(state):
+    """Returns a log callback that appends to DB AND to state events."""
+    collected = []
+    def log(et, step, st, msg):
+        e = _log(state, et, step, st, msg)
+        collected.append(e)
         return e
+    return log, collected
 
-    # --- INVESTIGATION ---
-    log("INVESTIGATION", "start", "INFO", f"Agent started investigation for {tx_id}")
-    log("INVESTIGATION", "load_transaction", "SUCCESS", f"Transaction {tx_id} loaded: \u20b9{tx['amount']:.0f}")
 
-    # --- LAYER 3: AI RESOLUTION AGENT ---
-    # Agent autonomously fetches data via tools and reasons over it.
-    api_key_present = bool(__import__("os").getenv("GEMINI_API_KEY") or __import__("os").getenv("GOOGLE_API_KEY"))
+# ── Node: Investigate ─────────────────────────────────────────────────────────
+
+def node_investigate(state: ResolutionState) -> dict:
+    tx_id = state["tx_id"]
+    tx = state["tx"]
+
+    log, collected = _make_log(state)
+    log("INVESTIGATION", "start", "INFO", f"ZeroTouch LangGraph agent started for {tx_id}")
+    log("INVESTIGATION", "load_transaction", "SUCCESS",
+        f"Transaction {tx_id} loaded from database: Rs.{tx['amount']:.0f}")
+
     narrative = investigate_transaction(tx_id, tx, log)
-    
-    log(
-        "INVESTIGATION", "ai_agent", "SUCCESS",
-        f"Agent investigation complete {'(Gemini Tool-Calling)' if api_key_present else '(deterministic fallback)'}"
-    )
+    log("INVESTIGATION", "narrative_complete", "SUCCESS",
+        "AI investigation narrative produced")
 
-    # --- RECONCILE (For Policy Engine) ---
-    # After the agent fetches the data, we build the immutable Evidence object for Layer 4
-    # The tools updated the in-memory 'tx' object indirectly? Wait!
-    # No, the tools return the status, but they don't mutate `TRANSACTIONS`.
-    # Wait, check_bank_status(tx_id) reads from TRANSACTIONS. TRANSACTIONS ALREADY HAS THE DATA.
-    # The whole system is mocked with pre-existing data in `tx`.
     evidence = Evidence(
         transaction_id=tx_id,
         bank=tx["bank_status"],
@@ -89,155 +98,377 @@ def run_resolution(tx_id: str) -> ResolutionResult:
         risk=tx["risk_score"],
         previous_refund=tx["previous_refund"],
     )
-    log("INVESTIGATION", "reconcile", "SUCCESS", "Evidence assembled for Policy Engine")
+    log("INVESTIGATION", "reconcile", "SUCCESS",
+        "Evidence assembled from all four system APIs")
 
-    # --- LAYER 4: POLICY & RISK CONTROL ---
-    policy = evaluate_policy(evidence)
-    log(
-        "POLICY",
-        "evaluate_policy",
-        "SUCCESS",
-        f"Policy decision: {policy.decision} | Authorized: {policy.authorized}",
-    )
+    return {
+        "evidence": evidence.model_dump(),
+        "investigation_narrative": narrative,
+        "events": collected,
+    }
 
-    # --- BRANCH: NO ACTION ---
-    if policy.decision == "NO_ACTION":
-        tx["resolution_status"] = "NO_ACTION"
-        log("INVESTIGATION", "no_action", "INFO", "Transaction is consistent. No action required.")
-        return ResolutionResult(
-            transaction_id=tx_id,
-            decision="NO_ACTION",
-            authorized=False,
-            action_id=None,
-            verification_status=None,
-            notification_sent=False,
-            support_case=None,
-            resolution_status="NO_ACTION",
-            events=[AuditEvent(**e) for e in AUDIT_EVENTS[tx_id]],
-            evidence=evidence,
-            escalation_reason=None,
-            suggested_resolution=None,
-            investigation_narrative=narrative,
-            agent_powered=api_key_present,
-        )
 
-    # --- BRANCH: HUMAN ESCALATION ---
-    if policy.decision == "HUMAN_ESCALATION":
-        tx["resolution_status"] = "ESCALATED"
-        log("ESCALATION", "escalate", "INFO", f"Escalating to human: {policy.reason}")
-        suggested = _generate_suggested_resolution(evidence)
-        case = create_support_case(
-            tx_id,
-            policy.reason,
-            evidence.model_dump(),
-            suggested,
-        )
-        log("ESCALATION", "create_support_case", "SUCCESS", f"Support case created: {case['case_id']}")
-        return ResolutionResult(
-            transaction_id=tx_id,
-            decision="HUMAN_ESCALATION",
-            authorized=False,
-            action_id=None,
-            verification_status=None,
-            notification_sent=False,
-            support_case=case["case_id"],
-            resolution_status="ESCALATED",
-            events=[AuditEvent(**e) for e in AUDIT_EVENTS[tx_id]],
-            evidence=evidence,
-            escalation_reason=policy.reason,
-            suggested_resolution=suggested,
-            investigation_narrative=narrative,
-            agent_powered=api_key_present,
-        )
+# ── Node: Policy ──────────────────────────────────────────────────────────────
 
-    # --- BRANCH: AUTO REVERSAL ---
-    log("ACTION", "initiate_reversal", "INFO", f"Policy approved. Initiating reversal for {tx_id}")
+def node_policy(state: ResolutionState) -> dict:
+    evidence = Evidence(**state["evidence"])
+    decision: PolicyDecision = evaluate_policy(evidence)
+
+    log, collected = _make_log(state)
+    log("POLICY", "evaluate_policy", "SUCCESS",
+        f"Policy decision: {decision.decision} | Authorized: {decision.authorized}")
+
+    return {
+        "policy": decision.model_dump(),
+        "events": collected,
+    }
+
+
+# ── Node: route (conditional edge source) ─────────────────────────────────────
+
+def route_decision(state: ResolutionState) -> str:
+    return state["policy"]["decision"]
+
+
+# ── Node: act_reverse (W1 auto-reversal) ─────────────────────────────────────
+
+def node_act_reverse(state: ResolutionState) -> dict:
+    tx_id = state["tx_id"]
+    log, collected = _make_log(state)
+
+    log("ACTION", "initiate_reversal", "INFO",
+        f"Policy authorized auto-reversal for {tx_id}")
     reversal = initiate_reversal(tx_id)
-
-    if reversal["status"] == "ALREADY_EXECUTED":
-        log("ACTION", "initiate_reversal", "INFO", f"Reversal already executed: {reversal['action_id']}")
-    else:
-        log("ACTION", "initiate_reversal", "SUCCESS", f"{reversal['action_id']} created")
-
     action_id = reversal["action_id"]
 
-    # --- VERIFICATION ---
-    log("VERIFICATION", "verify_resolution", "INFO", "Independently verifying resolution...")
-    verification = verify_resolution(tx_id)
+    if reversal["status"] == "ALREADY_EXECUTED":
+        log("ACTION", "initiate_reversal", "INFO",
+            f"Reversal already executed: {action_id}")
+    else:
+        log("ACTION", "initiate_reversal", "SUCCESS",
+            f"Reversal {action_id} created and applied")
 
-    if not verification["verified"]:
-        log("VERIFICATION", "verify_resolution", "FAILED", "Verification failed. Escalating to human.")
-        tx["resolution_status"] = "ESCALATED"
-        return _build_escalation_result(
-            tx_id, tx,
-            "Reversal executed but verification failed. Immediate human review required.",
-            AUDIT_EVENTS[tx_id],
-        )
+    return {"action_id": action_id, "events": collected}
 
-    log("VERIFICATION", "verify_resolution", "SUCCESS", "Resolution independently verified")
 
-    # --- NOTIFICATION ---
-    notification = send_customer_notification(tx_id, tx["amount"], action_id)
-    log("NOTIFICATION", "send_notification", "SUCCESS", f"Customer notified via {notification['channel']}")
+# ── Node: verify ──────────────────────────────────────────────────────────────
 
-    # --- CLOSE ---
-    tx["resolution_status"] = "RESOLVED"
-    log("INVESTIGATION", "close", "SUCCESS", "Case closed. No support ticket required.")
+def node_verify(state: ResolutionState) -> dict:
+    tx_id = state["tx_id"]
+    log, collected = _make_log(state)
+
+    log("VERIFICATION", "verify_resolution", "INFO",
+        "Independently verifying reversal outcome...")
+    result = verify_resolution(tx_id)
+
+    if result["verified"]:
+        log("VERIFICATION", "verify_resolution", "SUCCESS",
+            "Resolution independently verified across all ledgers")
+        return {"verification_status": "VERIFIED", "events": collected}
+    else:
+        log("VERIFICATION", "verify_resolution", "FAILED",
+            "Verification failed — escalating to human review")
+        return {"verification_status": "FAILED", "events": collected}
+
+
+# ── Node: act_sla (W2 SLA chase) ─────────────────────────────────────────────
+
+def node_act_sla(state: ResolutionState) -> dict:
+    tx_id = state["tx_id"]
+    tx = state["tx"]
+    log, collected = _make_log(state)
+
+    log("ACTION", "chase_bank_sla", "INFO",
+        f"SLA breach confirmed. Triggering bank escalation API for {tx_id}")
+    result = chase_bank_sla(tx_id)
+    log("ACTION", "chase_bank_sla", "SUCCESS",
+        f"Bank SLA escalation raised: {result['chase_ref']}. ETA: {result['eta_hours']}h")
+
+    return {"action_id": result["chase_ref"], "events": collected}
+
+
+# ── Node: act_wallet (W2 wallet credit) ──────────────────────────────────────
+
+def node_act_wallet(state: ResolutionState) -> dict:
+    tx_id = state["tx_id"]
+    tx = state["tx"]
+    log, collected = _make_log(state)
+
+    log("ACTION", "offer_wallet_credit", "INFO",
+        f"Destination bank account invalid. Initiating Paytm Wallet credit for {tx_id}")
+    result = offer_wallet_credit(tx_id, tx["amount"])
+    log("ACTION", "offer_wallet_credit", "SUCCESS",
+        f"Rs.{tx['amount']:.0f} credited to Paytm Wallet: {result['credit_ref']}")
+
+    return {"action_id": result["credit_ref"], "events": collected}
+
+
+# ── Node: act_itemize (W3 fee explanation) ───────────────────────────────────
+
+def node_act_itemize(state: ResolutionState) -> dict:
+    tx_id = state["tx_id"]
+    tx = state["tx"]
+    log, collected = _make_log(state)
+
+    # Parse fee from merchant_status field e.g. "FEE_DEDUCTION_1000"
+    try:
+        fee = float(tx["merchant_status"].split("_")[-1])
+    except (ValueError, IndexError):
+        fee = 0.0
+
+    log("ACTION", "generate_itemized_explanation", "INFO",
+        f"Settlement shortfall detected. Generating itemized reconciliation for {tx_id}")
+    result = generate_itemized_explanation(tx_id, tx["amount"], fee)
+    log("ACTION", "generate_itemized_explanation", "SUCCESS",
+        f"Itemized breakdown sent to merchant: {result['explanation_ref']}. No ticket raised.")
+
+    return {"action_id": result["explanation_ref"], "events": collected}
+
+
+# ── Node: act_hold (W3 compliance hold) ──────────────────────────────────────
+
+def node_act_hold(state: ResolutionState) -> dict:
+    tx_id = state["tx_id"]
+    log, collected = _make_log(state)
+
+    reason = state["policy"]["reason"]
+    log("ACTION", "flag_compliance_hold", "INFO",
+        f"KYC/compliance hold detected. Routing {tx_id} to compliance team")
+    result = flag_compliance_hold(tx_id, reason)
+    log("ACTION", "flag_compliance_hold", "SUCCESS",
+        f"Compliance case raised: {result['case_ref']}. Merchant notified of required docs.")
+
+    return {
+        "action_id": result["case_ref"],
+        "escalation_reason": result["reason"],
+        "events": collected,
+    }
+
+
+# ── Node: notify ──────────────────────────────────────────────────────────────
+
+def node_notify(state: ResolutionState) -> dict:
+    tx_id = state["tx_id"]
+    tx = state["tx"]
+    action_id = state.get("action_id", "N/A")
+    log, collected = _make_log(state)
+
+    notif = send_customer_notification(tx_id, tx["amount"], action_id)
+    log("NOTIFICATION", "send_notification", "SUCCESS",
+        f"Customer notified via {notif['channel']}")
+
+    return {"notification_sent": True, "events": collected}
+
+
+# ── Node: escalate ────────────────────────────────────────────────────────────
+
+def node_escalate(state: ResolutionState) -> dict:
+    tx_id = state["tx_id"]
+    tx = state["tx"]
+    log, collected = _make_log(state)
+
+    reason = (
+        state.get("escalation_reason")
+        or state["policy"]["reason"]
+    )
+    evidence = state["evidence"]
+    suggested = _generate_suggested_resolution(Evidence(**evidence))
+
+    log("ESCALATION", "escalate", "INFO", f"Escalating to human: {reason}")
+    case = create_support_case(tx_id, reason, evidence, suggested)
+    log("ESCALATION", "create_support_case", "SUCCESS",
+        f"Support case created: {case['case_id']} (Priority: HIGH)")
+
+    db_update_transaction(tx_id, resolution_status="ESCALATED")
+
+    return {
+        "support_case": case["case_id"],
+        "escalation_reason": reason,
+        "suggested_resolution": suggested,
+        "resolution_status": "ESCALATED",
+        "events": collected,
+    }
+
+
+# ── Node: close ───────────────────────────────────────────────────────────────
+
+def node_close(state: ResolutionState) -> dict:
+    tx_id = state["tx_id"]
+    policy_decision = state["policy"]["decision"]
+    log, collected = _make_log(state)
+
+    if policy_decision == "NO_ACTION":
+        db_update_transaction(tx_id, resolution_status="NO_ACTION")
+        log("INVESTIGATION", "no_action", "INFO",
+            "Transaction is consistent across all systems. No action required.")
+        return {"resolution_status": "NO_ACTION", "events": collected}
+
+    db_update_transaction(tx_id, resolution_status="RESOLVED")
+    log("INVESTIGATION", "close", "SUCCESS",
+        "Case closed by ZeroTouch. No support ticket created.")
+    return {"resolution_status": "RESOLVED", "events": collected}
+
+
+# ── Node: verify_or_escalate (conditional) ────────────────────────────────────
+
+def route_verification(state: ResolutionState) -> str:
+    return "close" if state.get("verification_status") == "VERIFIED" else "escalate"
+
+
+# ── Build the graph ───────────────────────────────────────────────────────────
+
+def build_graph() -> StateGraph:
+    g = StateGraph(ResolutionState)
+
+    # Register nodes
+    g.add_node("investigate",  node_investigate)
+    g.add_node("policy",       node_policy)
+    g.add_node("act_reverse",  node_act_reverse)
+    g.add_node("verify",       node_verify)
+    g.add_node("act_sla",      node_act_sla)
+    g.add_node("act_wallet",   node_act_wallet)
+    g.add_node("act_itemize",  node_act_itemize)
+    g.add_node("act_hold",     node_act_hold)
+    g.add_node("notify",       node_notify)
+    g.add_node("escalate",     node_escalate)
+    g.add_node("close",        node_close)
+
+    # Linear flow: start → investigate → policy → route
+    g.set_entry_point("investigate")
+    g.add_edge("investigate", "policy")
+
+    # Conditional routing after policy
+    g.add_conditional_edges(
+        "policy",
+        route_decision,
+        {
+            "AUTO_REVERSAL":       "act_reverse",
+            "SLA_CHASE":           "act_sla",
+            "WALLET_CREDIT_OFFER": "act_wallet",
+            "ITEMIZED_EXPLANATION":"act_itemize",
+            "COMPLIANCE_HOLD":     "act_hold",
+            "HUMAN_ESCALATION":    "escalate",
+            "NO_ACTION":           "close",
+        },
+    )
+
+    # W1: reverse → verify → (close or escalate) → END
+    g.add_edge("act_reverse", "verify")
+    g.add_conditional_edges("verify", route_verification, {
+        "close": "close", "escalate": "escalate"
+    })
+
+    # W2: act → notify → close
+    g.add_edge("act_sla",    "notify")
+    g.add_edge("act_wallet", "notify")
+    g.add_edge("notify",     "close")
+
+    # W3: itemize → close (no customer notification needed — it's a merchant flow)
+    g.add_edge("act_itemize", "close")
+
+    # W3 compliance: hold → escalate
+    g.add_edge("act_hold", "escalate")
+
+    # Terminal nodes
+    g.add_edge("close",    END)
+    g.add_edge("escalate", END)
+
+    return g.compile()
+
+
+# Compile once at module import
+_graph = build_graph()
+
+
+# ── Public entry point ────────────────────────────────────────────────────────
+
+def run_resolution(tx_id: str) -> ResolutionResult:
+    tx = db_get_transaction(tx_id)
+    if not tx:
+        raise ValueError(f"Transaction {tx_id} not found in database")
+
+    if tx["resolution_status"] != "PENDING":
+        # Already processed — return current state
+        events = db_get_events(tx_id)
+        return _state_to_result(tx_id, tx, events, already_done=True)
+
+    initial_state: ResolutionState = {
+        "tx_id": tx_id,
+        "tx": tx,
+        "events": [],
+        "evidence": None,
+        "policy": None,
+        "action_id": None,
+        "verification_status": None,
+        "notification_sent": False,
+        "support_case": None,
+        "escalation_reason": None,
+        "suggested_resolution": None,
+        "investigation_narrative": None,
+        "resolution_status": "PENDING",
+    }
+
+    final_state = _graph.invoke(initial_state)
+
+    # Fetch events from DB (source of truth)
+    events = db_get_events(tx_id)
+    tx_after = db_get_transaction(tx_id)
 
     return ResolutionResult(
         transaction_id=tx_id,
-        decision="AUTO_REVERSAL",
-        authorized=True,
-        action_id=action_id,
-        verification_status="VERIFIED",
-        notification_sent=True,
+        decision=final_state["policy"]["decision"],
+        authorized=final_state["policy"]["authorized"],
+        action_id=final_state.get("action_id"),
+        verification_status=final_state.get("verification_status"),
+        notification_sent=final_state.get("notification_sent", False),
+        support_case=final_state.get("support_case"),
+        resolution_status=tx_after["resolution_status"],
+        events=[AuditEvent(**{k: v for k, v in e.items() if k != "id" and k != "transaction_id"})
+                for e in events],
+        evidence=Evidence(**final_state["evidence"]) if final_state.get("evidence") else None,
+        escalation_reason=final_state.get("escalation_reason"),
+        suggested_resolution=final_state.get("suggested_resolution"),
+    )
+
+
+def _state_to_result(tx_id, tx, events, already_done=False) -> ResolutionResult:
+    """Build a ResolutionResult from the DB state for already-processed transactions."""
+    evidence = Evidence(
+        transaction_id=tx_id,
+        bank=tx["bank_status"],
+        network=tx["network_status"],
+        merchant=tx["merchant_status"],
+        settlement=tx["settlement_status"],
+        amount=tx["amount"],
+        risk=tx["risk_score"],
+        previous_refund=tx["previous_refund"],
+    )
+    return ResolutionResult(
+        transaction_id=tx_id,
+        decision=tx["resolution_status"],
+        authorized=False,
+        action_id=tx.get("action_id"),
+        verification_status=None,
+        notification_sent=False,
         support_case=None,
-        resolution_status="RESOLVED",
-        events=[AuditEvent(**e) for e in AUDIT_EVENTS[tx_id]],
+        resolution_status=tx["resolution_status"],
+        events=[AuditEvent(**{k: v for k, v in e.items() if k not in ("id", "transaction_id")})
+                for e in events],
         evidence=evidence,
         escalation_reason=None,
         suggested_resolution=None,
-        investigation_narrative=narrative,
-        agent_powered=api_key_present,
-    )
-
-
-def _build_escalation_result(tx_id, tx, reason, events_list):
-    from backend.models import AuditEvent, Evidence, ResolutionResult
-    evidence = Evidence(
-        transaction_id=tx_id,
-        bank=tx["bank_status"],
-        network=tx["network_status"],
-        merchant=tx["merchant_status"],
-        settlement=tx["settlement_status"],
-        amount=tx["amount"],
-        risk=tx["risk_score"],
-        previous_refund=tx["previous_refund"],
-    )
-    suggested = _generate_suggested_resolution(evidence)
-    case = create_support_case(tx_id, reason, evidence.model_dump(), suggested)
-    tx["resolution_status"] = "ESCALATED"
-    return ResolutionResult(
-        transaction_id=tx_id,
-        decision="HUMAN_ESCALATION",
-        authorized=False,
-        action_id=None,
-        verification_status=None,
-        notification_sent=False,
-        support_case=case["case_id"],
-        resolution_status="ESCALATED",
-        events=[AuditEvent(**e) for e in events_list] if events_list else [],
-        evidence=evidence,
-        escalation_reason=reason,
-        suggested_resolution=suggested,
-        investigation_narrative="Investigation failed or was interrupted early.",
-        agent_powered=False,
     )
 
 
 def _generate_suggested_resolution(evidence: Evidence) -> str:
-    if evidence.network == "UNKNOWN" or evidence.settlement == "UNKNOWN":
-        return "Investigate network and settlement status before initiating any reversal. Contact payment network provider for transaction trace."
+    if evidence.network in ("UNKNOWN", "SLA_BREACHED"):
+        return ("Investigate network and settlement status before initiating any reversal. "
+                "Contact payment network provider for transaction trace.")
     if evidence.risk >= 0.30:
-        return "High risk transaction. Verify customer identity and transaction authenticity before processing any refund."
-    return "Manual investigation required. Review all four payment system records before taking financial action."
+        return ("High risk transaction. Verify customer identity and transaction "
+                "authenticity before processing any refund.")
+    if "KYC" in evidence.settlement or "HELD" in evidence.settlement:
+        return ("Request updated KYC documents from merchant: Aadhaar, PAN Card, "
+                "and last 3 months bank statement.")
+    return ("Manual investigation required. Review all four payment system records "
+            "before taking financial action.")
