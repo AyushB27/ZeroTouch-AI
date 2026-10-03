@@ -34,9 +34,9 @@ export default function FinanceReconciliation() {
           <div>
             <div className="flex items-center gap-2 mb-1">
               <span className="bg-purple-100 text-purple-900 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider">
-                Pack C: Finance Operations · Non-Support Domain
+                Finance Operations · Ledger Reconciliation
               </span>
-              <span className="text-xs text-slate-400 font-mono">Demo Minute 2:30</span>
+              <span className="text-xs text-slate-400 font-mono">Nodal & Banking Feeds</span>
             </div>
             <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 tracking-tight">
               Bank Statement & General Ledger Reconciliation

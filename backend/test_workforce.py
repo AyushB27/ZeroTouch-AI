@@ -181,3 +181,37 @@ def test_academy_coach_evaluation():
     assert run.passed is True
     assert "ledger_reconciliation" in run.competencies
     assert run.competencies["overall_readiness"] >= 85.0
+
+
+def test_task_inbox_real_multi_agent_execution():
+    """Verify that approving a task executes the real multi-agent pipeline and mutates SQLite DB."""
+    from backend.workforce_router import approve_task, ApproveRequest
+    from backend.database import db_get_transaction
+
+    # Case CASE-SPT-9281 corresponds to transaction TX9281
+    tx_before = db_get_transaction("TX9281")
+    assert tx_before["resolution_status"] == "PENDING"
+
+    # Operator approves in 1 click
+    req = ApproveRequest(approver="Aarav Sharma", notes="Approved verified refund")
+    result = approve_task("CASE-SPT-9281", req)
+
+    # 1. Platform status
+    assert result["status"] == "APPROVED"
+    assert result["case"]["execution_ref"] == "REV-TX9281"
+    assert result["case"]["verification_status"] == "VERIFIED"
+
+    # 2. Multi-agent trace has all 5 agents
+    assert len(result["agent_trace"]) == 5
+    agent_names = [a["agent"] for a in result["agent_trace"]]
+    assert "Ledger Investigator Agent" in agent_names
+    assert "Risk & Credit Profiling Agent" in agent_names
+    assert "Policy & Compliance Supervisor" in agent_names
+    assert "Action Gateway" in agent_names
+    assert "Dynamic Communication Agent" in agent_names
+
+    # 3. Database is mutated to RESOLVED with verified action
+    tx_after = db_get_transaction("TX9281")
+    assert tx_after["resolution_status"] == "RESOLVED"
+    assert tx_after["action_id"] == "REV-TX9281"
+

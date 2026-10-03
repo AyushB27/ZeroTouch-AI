@@ -44,7 +44,7 @@ export default function ManagerDashboard({ currentRole, killSwitchActive, onTogg
               <span className="bg-emerald-100 text-emerald-800 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider">
                 Executive Operations & Governance
               </span>
-              <span className="text-xs text-slate-400 font-mono">Demo Minute 5:00</span>
+              <span className="text-xs text-slate-400 font-mono">Operations Model</span>
             </div>
             <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 tracking-tight">
               Manager Governance & Capacity Dashboard

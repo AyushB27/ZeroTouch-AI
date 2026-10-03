@@ -52,7 +52,7 @@ export default function AcademySandbox() {
               <span className="bg-blue-100 text-[#07356b] text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider">
                 New Joiner Academy Sandbox
               </span>
-              <span className="text-xs text-slate-400 font-mono">Demo Minute 4:30</span>
+              <span className="text-xs text-slate-400 font-mono">Simulation Environment</span>
             </div>
             <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 tracking-tight">
               Onboarding Sandbox & AI Coach

@@ -32,11 +32,11 @@ export default function WorkforceNavbar({
             <div className="flex items-center gap-2">
               <span className="font-extrabold text-base tracking-tight text-white">ZeroTouch Workforce</span>
               <span className="bg-cyan-500/20 text-cyan-300 border border-cyan-400/30 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
-                Prototype
+                Enterprise
               </span>
             </div>
             <div className="text-[10px] text-blue-200/80 font-medium -mt-0.5">
-              Team Trex · Paytm Hackathon: Autonomous AI Teammates
+              Autonomous Operations & Payment Teammate
             </div>
           </div>
         </div>
@@ -67,7 +67,7 @@ export default function WorkforceNavbar({
             title="Toggle numbered integration point overlays (Page 6)"
           >
             <Eye size={13} />
-            <span className="hidden lg:inline">Integration Points</span>
+            <span className="hidden lg:inline">Architecture Points</span>
           </button>
 
           {/* Emergency Kill Switch */}
@@ -137,9 +137,23 @@ export default function WorkforceNavbar({
                 : 'text-blue-200 hover:bg-white/10 hover:text-white'
             }`}
           >
-            <span>📥 Task Inbox</span>
+            <span>📥 Task Queue</span>
             <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-cyan-500 text-white font-mono">
-              6 Pre-Worked
+              Pre-Worked
+            </span>
+          </button>
+
+          <button
+            onClick={() => onSelectTab('studio')}
+            className={`px-3 py-1 rounded-lg font-bold transition flex items-center gap-1.5 ${
+              activeTab === 'studio'
+                ? 'bg-white text-[#07356b] shadow-xs'
+                : 'text-blue-200 hover:bg-white/10 hover:text-white'
+            }`}
+          >
+            <span>🛠️ Skill Studio</span>
+            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-blue-400 text-slate-900 font-bold">
+              Teach Skills
             </span>
           </button>
 
@@ -151,21 +165,7 @@ export default function WorkforceNavbar({
                 : 'text-blue-200 hover:bg-white/10 hover:text-white'
             }`}
           >
-            <span>📊 Finance Reconciliation</span>
-          </button>
-
-          <button
-            onClick={() => onSelectTab('studio')}
-            className={`px-3 py-1 rounded-lg font-bold transition flex items-center gap-1.5 ${
-              activeTab === 'studio'
-                ? 'bg-white text-[#07356b] shadow-xs'
-                : 'text-blue-200 hover:bg-white/10 hover:text-white'
-            }`}
-          >
-            <span>🛠️ Skill Studio (Teach IT)</span>
-            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-400 text-slate-900 font-bold">
-              Winning Slice
-            </span>
+            <span>📊 Finance Ledger</span>
           </button>
 
           <button
@@ -176,7 +176,7 @@ export default function WorkforceNavbar({
                 : 'text-blue-200 hover:bg-white/10 hover:text-white'
             }`}
           >
-            <span>🎓 Academy (Joiner Sandbox)</span>
+            <span>🎓 Joiner Sandbox</span>
           </button>
 
           <button
@@ -187,9 +187,9 @@ export default function WorkforceNavbar({
                 : 'text-blue-200 hover:bg-white/10 hover:text-white'
             }`}
           >
-            <span>📈 Manager Dashboard</span>
+            <span>📈 Operations & Capacity</span>
             <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-400 text-slate-900 font-bold">
-              1.5 FTE Freed
+              1.54 FTE Freed
             </span>
           </button>
         </div>

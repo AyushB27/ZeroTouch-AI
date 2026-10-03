@@ -9,7 +9,7 @@ const QUICK_COMMANDS = [
   {
     icon: '⏱️',
     label: 'Chase all refunds past SLA',
-    detail: 'Demo Minute 1:30: Scans overdue refunds, dispatches bank chase, tracks compensation clock',
+    detail: 'Autonomous workflow: Scans overdue refunds, dispatches bank chase, tracks compensation clock',
   },
   {
     icon: '📊',

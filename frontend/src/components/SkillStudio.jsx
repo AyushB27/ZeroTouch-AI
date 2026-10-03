@@ -98,10 +98,10 @@ export default function SkillStudio({ onSkillPublished }) {
         <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <span className="bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider">
-                The Winning Slice · Live Skill Studio
+              <span className="bg-blue-100 text-blue-900 border border-blue-300 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider">
+                Live Skill Studio · Continuous Learning
               </span>
-              <span className="text-xs text-slate-400 font-mono">Demo Minute 3:15</span>
+              <span className="text-xs text-slate-400 font-mono">Interactive Synthesis</span>
             </div>
             <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 tracking-tight">
               Teach a New Domain: IT Tool Access Provisioning
