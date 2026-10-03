@@ -376,18 +376,18 @@ def _seed_enterprise_records():
                             "conversions": 105 + index * 18, "spend": float(18000 + index * 4200),
                             "revenue": float(43000 + index * 9100), "created_at": now}
                 conn.execute(campaigns_table.insert().values(**campaign, payload=json.dumps(campaign)))
-        if conn.execute(text("SELECT COUNT(*) FROM support_tickets")).scalar() == 0:
+        if os.getenv("EXTENDED_SEED") and conn.execute(text("SELECT COUNT(*) FROM support_tickets")).scalar() == 0:
             for index in range(20):
                 tx_id = f"TX{10000 + index}"
                 case_id = case_id_for_tx(tx_id)
-                customer_id = conn.execute(cases_table.select().with_only_columns(cases_table.c.customer_id).where(cases_table.c.transaction_id == tx_id)).scalar_one()
+                customer_id = conn.execute(cases_table.select().with_only_columns(cases_table.c.customer_id).where(cases_table.c.transaction_id == tx_id)).scalar_one_or_none() or "cust-ayush"
                 status = "OPEN" if index % 4 else "RESOLVED"
                 conn.execute(support_tickets_table.insert().values(ticket_id=f"TKT-DEMO-{index + 1:03d}",
                     case_id=case_id, customer_id=customer_id, category="PAYMENT" if index % 2 else "REFUND",
                     priority=("HIGH" if index % 3 == 0 else "NORMAL"), status=status, assigned_team="Payment Support",
                     summary=f"Customer reported a {'failed payment' if index % 2 else 'refund status'} issue for {tx_id}.",
                     created_at=now, resolved_at=now if status == "RESOLVED" else None))
-        if conn.execute(text("SELECT COUNT(*) FROM refunds")).scalar() == 0:
+        if os.getenv("EXTENDED_SEED") and conn.execute(text("SELECT COUNT(*) FROM refunds")).scalar() == 0:
             for index in range(10):
                 tx_id = f"TX{10004 + index * 5}"
                 case = conn.execute(cases_table.select().where(cases_table.c.transaction_id == tx_id)).mappings().first()
@@ -515,7 +515,9 @@ def _migrate_schema():
 def _seed_transactions():
     """Insert original and extended fictional transactions and link each to its owner."""
     from backend.data import ORIGINAL_TRANSACTIONS
-    all_rows = list(ORIGINAL_TRANSACTIONS.values()) + _extended_demo_transactions()
+    all_rows = list(ORIGINAL_TRANSACTIONS.values())
+    if os.getenv("EXTENDED_SEED"):
+        all_rows += _extended_demo_transactions()
     ts = datetime.now(timezone.utc).isoformat()
     with engine.begin() as conn:
         for source in all_rows:
