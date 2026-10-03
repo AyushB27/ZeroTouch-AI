@@ -528,7 +528,65 @@ def submit_academy_case(req: AcademySubmitRequest = Body(...)):
     return {"run": run.model_dump()}
 
 
-# ── 9. Reset ──────────────────────────────────────────────────────────────────
+# ── 9. Agent Trace Logs Explorer (Admin Analytics) ────────────────────────────
+
+@workforce_router.get("/trace-logs")
+def get_trace_logs(
+    tx_id: Optional[str] = Query(None, description="Filter by transaction ID"),
+    actor: Optional[str] = Query(None, description="Filter by agent/actor name"),
+    status: Optional[str] = Query(None, description="Filter by status: SUCCESS, INFO, FLAGGED"),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """Returns aggregated, chronological multi-agent trace logs across all workflows for Admin Analytics."""
+    from backend.database import db_get_all_transactions, db_get_events, case_id_for_tx
+
+    txs = db_get_all_transactions()
+    all_logs = []
+
+    for tx in txs:
+        t_id = tx["transaction_id"]
+        if tx_id and tx_id.upper() not in t_id.upper():
+            continue
+        events = db_get_events(t_id)
+        cid = case_id_for_tx(t_id)
+        for e in events:
+            all_logs.append({
+                "id": e.get("id"),
+                "transaction_id": t_id,
+                "case_id": cid,
+                "timestamp": e.get("timestamp"),
+                "agent": e.get("actor", "ZeroTouch Agent"),
+                "step": e.get("step"),
+                "status": e.get("status"),
+                "message": e.get("message"),
+                "visibility": e.get("visibility", "INTERNAL"),
+                "workflow_type": tx.get("workflow_type", "W1"),
+                "amount": tx.get("amount", 0.0),
+                "customer_name": tx.get("customer_name", "Paytm User"),
+            })
+
+    if actor and actor.lower() != "all":
+        all_logs = [l for l in all_logs if actor.lower() in l.get("agent", "").lower()]
+    if status and status.lower() != "all":
+        all_logs = [l for l in all_logs if status.lower() in l.get("status", "").lower()]
+
+    sorted_logs = sorted(all_logs, key=lambda x: x.get("timestamp", ""), reverse=True)
+    return {
+        "logs": sorted_logs[:limit],
+        "total": len(sorted_logs),
+        "agents": [
+            "Ledger Investigator Agent",
+            "Risk & Credit Profiling Agent",
+            "Policy & Compliance Supervisor",
+            "Action Gateway",
+            "Independent Verifier",
+            "Dynamic Communication Agent",
+            "Connector Execution Gateway",
+        ],
+    }
+
+
+# ── 10. Reset ─────────────────────────────────────────────────────────────────
 
 @workforce_router.post("/reset")
 def reset_workforce():

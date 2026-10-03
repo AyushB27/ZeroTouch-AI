@@ -48,11 +48,15 @@ app = FastAPI(title="ZeroTouch Payment Resolution Engine", version="2.0.0", life
 # Hackathon demo identities. Tokens are issued and role-bound on the server;
 # clients cannot elevate privileges by changing a role field.
 DEMO_USERS = {
-    "ayush@zerotouch.demo": {"password": "demo123", "role": "CUSTOMER", "name": "Ayush", "id": "cust-ayush", "email": "ayush@zerotouch.demo"},
-    "ayush.admin@zerotouch.demo": {"password": "demo123", "role": "ADMIN", "name": "Ayush (Ops)", "id": "admin-ayush", "email": "ayush.admin@zerotouch.demo"},
-    "vansh@zerotouch.demo": {"password": "demo123", "role": "CUSTOMER", "name": "Vansh", "id": "cust-vansh", "email": "vansh@zerotouch.demo"},
-    "support@zerotouch.demo": {"password": "demo123", "role": "ADMIN", "name": "Support Agent", "id": "admin-support", "email": "support@zerotouch.demo"},
-    "admin@zerotouch.demo": {"password": "demo123", "role": "ADMIN", "name": "Ops Admin", "id": "admin-ops", "email": "admin@zerotouch.demo"},
+    "manager@zerotouch.demo": {"password": "demo123", "role": "ADMIN", "workforce_role": "manager", "name": "Rajesh Mehra", "title": "VP of Operations (Admin)", "id": "admin-rajesh", "email": "manager@zerotouch.demo", "domain": "all"},
+    "admin@zerotouch.demo":   {"password": "demo123", "role": "ADMIN", "workforce_role": "manager", "name": "Rajesh Mehra", "title": "VP of Operations (Admin)", "id": "admin-rajesh", "email": "admin@zerotouch.demo", "domain": "all"},
+    "support@zerotouch.demo": {"password": "demo123", "role": "ADMIN", "workforce_role": "support_agent", "name": "Aarav Sharma", "title": "Senior Support Specialist", "id": "admin-aarav", "email": "support@zerotouch.demo", "domain": "support"},
+    "finance@zerotouch.demo": {"password": "demo123", "role": "ADMIN", "workforce_role": "finance_analyst", "name": "Neha Patel", "title": "Lead Reconciliation Analyst", "id": "admin-neha", "email": "finance@zerotouch.demo", "domain": "finance"},
+    "it@zerotouch.demo":      {"password": "demo123", "role": "ADMIN", "workforce_role": "skill_owner", "name": "Vikram Malhotra", "title": "Staff Operations Engineer (IT Lead)", "id": "admin-vikram", "email": "it@zerotouch.demo", "domain": "it"},
+    "hr@zerotouch.demo":      {"password": "demo123", "role": "ADMIN", "workforce_role": "recruiter", "name": "Priya Nair", "title": "Technical Talent Partner (HR)", "id": "admin-priya", "email": "hr@zerotouch.demo", "domain": "hr"},
+    "joiner@zerotouch.demo":  {"password": "demo123", "role": "ADMIN", "workforce_role": "new_joiner", "name": "Kavita Rao", "title": "Associate Operations Trainee", "id": "admin-kavita", "email": "joiner@zerotouch.demo", "domain": "support"},
+    "ayush@zerotouch.demo":   {"password": "demo123", "role": "CUSTOMER", "workforce_role": "customer", "name": "Ayush Bhardwaj", "title": "Paytm Customer", "id": "cust-ayush", "email": "ayush@zerotouch.demo", "domain": "customer"},
+    "vansh@zerotouch.demo":   {"password": "demo123", "role": "CUSTOMER", "workforce_role": "customer", "name": "Vansh", "title": "Paytm Customer", "id": "cust-vansh", "email": "vansh@zerotouch.demo", "domain": "customer"},
 }
 SESSIONS: dict[str, dict] = {}
 
@@ -110,24 +114,30 @@ def login(credentials: LoginRequest):
     raw_email = credentials.email.strip().lower()
     account = DEMO_USERS.get(raw_email)
 
-    # Resilient demo fallback: if any custom email/name is entered during judging or demo
+    # Resilient demo fallback: if any custom email/name is entered
     if not account:
-        role = "ADMIN" if any(k in raw_email for k in ("admin", "support", "ops")) else "CUSTOMER"
+        role = "ADMIN" if any(k in raw_email for k in ("admin", "support", "ops", "finance", "it", "hr", "manager")) else "CUSTOMER"
         name_part = raw_email.split("@")[0].replace(".", " ").title()
         account = {
             "password": credentials.password or "demo123",
             "role": role,
+            "workforce_role": "manager" if role == "ADMIN" else "customer",
             "name": name_part or "Demo User",
+            "title": "Operations Specialist" if role == "ADMIN" else "Customer",
             "id": f"{role.lower()}-{raw_email.split('@')[0]}",
             "email": raw_email,
+            "domain": "all" if role == "ADMIN" else "customer",
         }
 
     token = secrets.token_urlsafe(32)
     SESSIONS[token] = {
         "role": account["role"],
+        "workforce_role": account.get("workforce_role", "manager" if account["role"] == "ADMIN" else "customer"),
         "name": account["name"],
+        "title": account.get("title", account["name"]),
         "id": account["id"],
         "email": account.get("email", raw_email),
+        "domain": account.get("domain", "all"),
     }
     return {"token": token, "user": SESSIONS[token]}
 

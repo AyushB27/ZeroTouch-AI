@@ -62,15 +62,31 @@ const DEFAULT_ROLES = [
   },
 ];
 
-export default function ZeroTouchWorkforceWorkspace({ onSwitchToLegacy }) {
+export default function ZeroTouchWorkforceWorkspace({
+  initialRole = 'manager',
+  currentUser = null,
+  onSignOut,
+  onSwitchToLegacy,
+}) {
   const [roles, setRoles] = useState(DEFAULT_ROLES);
-  const [currentRole, setCurrentRole] = useState(DEFAULT_ROLES[0]);
-  const [activeTab, setActiveTab] = useState('inbox');
+  const initialRoleObj = DEFAULT_ROLES.find(r => r.role_id === initialRole) || DEFAULT_ROLES[0];
+  const [currentRole, setCurrentRole] = useState(initialRoleObj);
+  const [activeTab, setActiveTab] = useState(initialRoleObj.landing_page || 'dashboard');
   const [tasks, setTasks] = useState([]);
   const [killSwitchActive, setKillSwitchActive] = useState(false);
   const [commandBarOpen, setCommandBarOpen] = useState(false);
   const [showIntegrationPoints, setShowIntegrationPoints] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
+
+  useEffect(() => {
+    if (initialRole) {
+      const found = DEFAULT_ROLES.find(r => r.role_id === initialRole);
+      if (found) {
+        setCurrentRole(found);
+        if (found.landing_page) setActiveTab(found.landing_page);
+      }
+    }
+  }, [initialRole]);
 
   // Load tasks & governor state
   const loadData = useCallback(async () => {
@@ -154,6 +170,7 @@ export default function ZeroTouchWorkforceWorkspace({ onSwitchToLegacy }) {
         onToggleIntegrationPoints={() => setShowIntegrationPoints(!showIntegrationPoints)}
         onResetPlatform={handleResetPlatform}
         isResetting={isResetting}
+        onSignOut={onSignOut}
       />
 
       {/* ── Main Domain Workspace Canvas ── */}

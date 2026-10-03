@@ -3,9 +3,10 @@ import {
   CheckCircle2, Clock3, AlertTriangle, ShieldCheck,
   ChevronRight, ArrowRight, XCircle, Edit3, Send, Check,
   FileText, Layers, ExternalLink, ShieldAlert, Sparkles, Filter,
-  Bot, Loader2
+  Bot, Loader2, ScrollText
 } from 'lucide-react';
 import { approveWorkforceTask, editWorkforceTask, rejectWorkforceTask } from '../api';
+import AgentTraceLogsExplorer from './AgentTraceLogsExplorer';
 
 const money = val => (val ? `₹${Number(val).toLocaleString('en-IN')}` : '₹0');
 
@@ -137,6 +138,7 @@ export default function TaskInbox({
   const [editMessage, setEditMessage] = useState('');
   const [rejectReason, setRejectReason] = useState('');
   const [feedbackNotice, setFeedbackNotice] = useState(null);
+  const [traceModalOpen, setTraceModalOpen] = useState(false);
 
   // Filter tasks
   const filteredTasks = tasks.filter(t => {
@@ -436,23 +438,33 @@ export default function TaskInbox({
                   <Bot size={14} className="text-[#07356b]" />
                   Autonomous Multi-Agent Execution Pipeline
                 </h2>
-                <span className={`text-[11px] font-bold flex items-center gap-1 ${
-                  activeTask.status === 'APPROVED' || activeTask.status === 'AUTO_EXECUTED'
-                    ? 'text-emerald-700'
-                    : 'text-blue-700'
-                }`}>
-                  {activeTask.status === 'APPROVED' || activeTask.status === 'AUTO_EXECUTED' ? (
-                    <>
-                      <CheckCircle2 size={13} className="text-emerald-600" />
-                      <span>All Agents Executed & Mutated State</span>
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles size={13} className="text-cyan-600" />
-                      <span>Agents 1-3 Pre-Worked · Ready for 1-Click Execution</span>
-                    </>
-                  )}
-                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setTraceModalOpen(true)}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-[11px] font-bold text-[#07356b] shadow-2xs transition"
+                    title="View step-by-step agent trace telemetry logs"
+                  >
+                    <ScrollText size={12} />
+                    <span>View Trace Logs</span>
+                  </button>
+                  <span className={`text-[11px] font-bold flex items-center gap-1 ${
+                    activeTask.status === 'APPROVED' || activeTask.status === 'AUTO_EXECUTED'
+                      ? 'text-emerald-700'
+                      : 'text-blue-700'
+                  }`}>
+                    {activeTask.status === 'APPROVED' || activeTask.status === 'AUTO_EXECUTED' ? (
+                      <>
+                        <CheckCircle2 size={13} className="text-emerald-600" />
+                        <span>All Agents Executed</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={13} className="text-cyan-600" />
+                        <span>Ready for 1-Click Execution</span>
+                      </>
+                    )}
+                  </span>
+                </div>
               </div>
 
               <div className={`grid grid-cols-1 ${getAgentTrace(activeTask).length === 5 ? 'sm:grid-cols-5' : 'sm:grid-cols-3'} gap-2`}>
@@ -674,6 +686,34 @@ export default function TaskInbox({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Case Trace Logs Modal ── */}
+      {traceModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl max-w-4xl w-full max-h-[85vh] overflow-hidden flex flex-col shadow-2xl border border-slate-200">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+              <div className="flex items-center gap-2">
+                <Bot size={18} className="text-[#07356b]" />
+                <span className="font-extrabold text-sm text-slate-900">
+                  Case Telemetry Trace: {activeTask?.evidence?.transaction_id || activeTask?.case_id}
+                </span>
+              </div>
+              <button
+                onClick={() => setTraceModalOpen(false)}
+                className="w-8 h-8 rounded-xl bg-slate-200 hover:bg-slate-300 flex items-center justify-center text-slate-700 font-bold"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4">
+              <AgentTraceLogsExplorer
+                initialTxId={activeTask?.evidence?.transaction_id || activeTask?.case_id}
+                isEmbedded={true}
+              />
+            </div>
           </div>
         </div>
       )}

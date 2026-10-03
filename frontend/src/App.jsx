@@ -1042,8 +1042,24 @@ export default function App() {
     getCurrentUser().then(setUser).catch(() => logout()).finally(() => setCheckingSession(false));
   }, []);
 
-  const handleLogin = async () => setUser(await getCurrentUser());
-  const handleLogout = () => { logout(); setUser(null); };
+  const handleLogin = async () => {
+    try {
+      const u = await getCurrentUser();
+      setUser(u);
+      if (u.workforce_role === 'customer' || u.role === 'CUSTOMER') {
+        setViewMode('legacy_customer');
+      } else {
+        setViewMode('workforce');
+      }
+    } catch (e) {
+      console.error('Failed to get user after login', e);
+    }
+  };
+
+  const handleLogout = () => {
+    logout();
+    setUser(null);
+  };
 
   const handleSwitchToCustomer = async () => {
     try {
@@ -1059,22 +1075,50 @@ export default function App() {
     try {
       const u = await login('support@zerotouch.demo', 'demo123');
       setUser(u);
-      setViewMode('legacy_ops');
+      setViewMode('workforce');
     } catch (e) {
       console.error('Failed to switch to support ops console', e);
     }
   };
 
-  // Primary Platform: ZeroTouch Workforce
+  if (checkingSession) {
+    return (
+      <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-900 text-white">
+        <Loader2 className="w-8 h-8 animate-spin text-cyan-400 mb-3" />
+        <p className="text-sm font-medium text-slate-400">Loading ZeroTouch Platform...</p>
+      </div>
+    );
+  }
+
+  // Stakeholder Sign-In Screen (with 1-click logins)
+  if (!user) {
+    return <LoginScreen onLogin={handleLogin} />;
+  }
+
+  // Customer Experience Portal
+  if (user.workforce_role === 'customer' || user.role === 'CUSTOMER' || viewMode === 'legacy_customer') {
+    return (
+      <CustomerPortal
+        user={user}
+        onLogout={handleLogout}
+        onSwitchToOps={handleSwitchToOps}
+      />
+    );
+  }
+
+  // Primary Platform: ZeroTouch Autonomous Workforce
   if (viewMode === 'workforce') {
     return (
       <ZeroTouchWorkforceWorkspace
+        initialRole={user.workforce_role || 'manager'}
+        currentUser={user}
+        onSignOut={handleLogout}
         onSwitchToLegacy={() => setViewMode('legacy_ops')}
       />
     );
   }
 
-  // Legacy Views (if toggled)
+  // Legacy Ops Console (if explicitly toggled)
   return (
     <div className="relative h-screen w-screen overflow-hidden flex flex-col">
       <div className="h-8 bg-slate-900 text-white px-4 flex items-center justify-between text-xs z-50 shrink-0">
@@ -1087,11 +1131,7 @@ export default function App() {
         </button>
       </div>
       <div className="flex-1 overflow-hidden">
-        {viewMode === 'legacy_customer' ? (
-          <CustomerPortal user={user || { name: 'Ayush' }} onLogout={handleLogout} onSwitchToOps={handleSwitchToOps} />
-        ) : (
-          <OperationsConsole onLogout={handleLogout} onSwitchToCustomer={handleSwitchToCustomer} />
-        )}
+        <OperationsConsole onLogout={handleLogout} onSwitchToCustomer={handleSwitchToCustomer} />
       </div>
     </div>
   );

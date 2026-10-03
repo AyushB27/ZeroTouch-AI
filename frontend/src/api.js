@@ -173,3 +173,8 @@ export const submitAcademyCase = (joinerId, answers) =>
 export const resetWorkforcePlatform = () =>
   request('/workforce/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
 
+export const getWorkforceTraceLogs = (params = {}) => {
+  const query = new URLSearchParams(params).toString();
+  return request(`/workforce/trace-logs${query ? `?${query}` : ''}`);
+};
+

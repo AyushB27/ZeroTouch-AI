@@ -2,7 +2,7 @@ import React from 'react';
 import {
   ShieldAlert, ShieldCheck, Terminal, Layers, RefreshCw,
   Users, CheckCircle2, AlertTriangle, ChevronDown, Sparkles,
-  Command, Eye, Zap, HelpCircle
+  Command, Eye, Zap, HelpCircle, LogOut
 } from 'lucide-react';
 
 export default function WorkforceNavbar({
@@ -18,6 +18,7 @@ export default function WorkforceNavbar({
   onToggleIntegrationPoints,
   onResetPlatform,
   isResetting,
+  onSignOut,
 }) {
   return (
     <header className="bg-[#07356b] text-white border-b border-white/10 shrink-0 select-none shadow-md z-30">
@@ -123,6 +124,18 @@ export default function WorkforceNavbar({
           >
             <RefreshCw size={14} className={isResetting ? 'animate-spin' : ''} />
           </button>
+
+          {/* Sign Out Button */}
+          {onSignOut && (
+            <button
+              onClick={onSignOut}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 hover:text-white border border-rose-400/30 text-xs font-bold transition shadow-2xs"
+              title="Sign out and return to Stakeholder Sign-In portal"
+            >
+              <LogOut size={13} />
+              <span className="hidden md:inline">Sign Out</span>
+            </button>
+          )}
         </div>
       </div>
 

@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 import {
   TrendingUp, Users, ShieldAlert, ShieldCheck, CheckCircle2,
   Clock3, AlertTriangle, Sliders, ArrowUpRight, DollarSign,
-  Activity, Layers, RefreshCw
+  Activity, Layers, RefreshCw, Bot, FileText, BarChart2
 } from 'lucide-react';
 import { getWorkforceDashboard, toggleWorkforceKillSwitch } from '../api';
+import AgentTraceLogsExplorer from './AgentTraceLogsExplorer';
 
 const money = val => (val ? `₹${Number(val).toLocaleString('en-IN')}` : '₹0');
 
@@ -13,6 +14,7 @@ export default function ManagerDashboard({ currentRole, killSwitchActive, onTogg
   const [repetitivePct, setRepetitivePct] = useState(0.40);
   const [skillCoveragePct, setSkillCoveragePct] = useState(0.60);
   const [timeSavedPct, setTimeSavedPct] = useState(0.80);
+  const [viewMode, setViewMode] = useState('trace_logs'); // 'trace_logs' or 'capacity'
 
   const [dashboardData, setDashboardData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -47,10 +49,10 @@ export default function ManagerDashboard({ currentRole, killSwitchActive, onTogg
               <span className="text-xs text-slate-400 font-mono">Operations Model</span>
             </div>
             <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 tracking-tight">
-              Manager Governance & Capacity Dashboard
+              Admin Analytics & Operations Governance
             </h1>
             <p className="text-xs text-slate-500 mt-0.5">
-              Live capacity model, per-skill autonomy ladder, immutable audit log, and emergency kill switch.
+              Multi-agent telemetry logs, ROI capacity formulas, autonomy ladders, and emergency safety controls.
             </p>
           </div>
 
@@ -64,17 +66,51 @@ export default function ManagerDashboard({ currentRole, killSwitchActive, onTogg
           </button>
         </div>
 
-        {/* ── Section 1: Live Interactive Capacity Model (Page 5) ── */}
-        <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-xs space-y-5">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-            <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wider text-slate-500">
-              <TrendingUp size={15} className="text-[#07356b]" />
-              <span>Capacity Model (Official Formula from Page 5)</span>
-            </div>
-            <span className="text-[11px] font-semibold text-slate-500 italic">
-              Adjust sliders below to simulate team scaling
-            </span>
-          </div>
+        {/* View Switcher: Trace Logs vs Capacity ROI */}
+        <div className="flex items-center gap-1.5 p-1 bg-slate-200/80 rounded-2xl w-fit text-xs font-bold">
+          <button
+            onClick={() => setViewMode('trace_logs')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl transition ${
+              viewMode === 'trace_logs'
+                ? 'bg-[#07356b] text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Bot size={15} />
+            <span>Multi-Agent Trace Logs & Analysis</span>
+          </button>
+          <button
+            onClick={() => setViewMode('capacity')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl transition ${
+              viewMode === 'capacity'
+                ? 'bg-[#07356b] text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <TrendingUp size={15} />
+            <span>ROI Capacity Model (1.54 FTE) & Ladder</span>
+          </button>
+        </div>
+
+        {/* ── View 1: Trace Logs & Analysis Explorer ── */}
+        {viewMode === 'trace_logs' && (
+          <AgentTraceLogsExplorer isEmbedded={true} />
+        )}
+
+        {/* ── View 2: Capacity Model & Autonomy Ladder ── */}
+        {viewMode === 'capacity' && (
+          <>
+            {/* ── Section 1: Live Interactive Capacity Model (Page 5) ── */}
+            <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-xs space-y-5">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wider text-slate-500">
+                  <TrendingUp size={15} className="text-[#07356b]" />
+                  <span>Capacity Model (Official Formula from Page 5)</span>
+                </div>
+                <span className="text-[11px] font-semibold text-slate-500 italic">
+                  Adjust sliders below to simulate team scaling
+                </span>
+              </div>
 
           {/* 4 Hero KPI Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-left">
@@ -347,6 +383,8 @@ export default function ManagerDashboard({ currentRole, killSwitchActive, onTogg
             </div>
           </div>
         </div>
+        </>
+      )}
       </div>
     </div>
   );

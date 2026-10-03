@@ -186,7 +186,9 @@ def test_academy_coach_evaluation():
 def test_task_inbox_real_multi_agent_execution():
     """Verify that approving a task executes the real multi-agent pipeline and mutates SQLite DB."""
     from backend.workforce_router import approve_task, ApproveRequest
-    from backend.database import db_get_transaction
+    from backend.database import db_get_transaction, db_reset_all
+
+    db_reset_all()
 
     # Case CASE-SPT-9281 corresponds to transaction TX9281
     tx_before = db_get_transaction("TX9281")
