@@ -16,6 +16,7 @@ import { getCurrentUser, logout, login } from './api';
 import LoginScreen from './components/LoginScreen';
 import CustomerPortal from './components/CustomerPortal';
 import ZeroTouchWorkforceWorkspace from './components/ZeroTouchWorkforceWorkspace';
+import EmployeeWorkspace from './components/EmployeeWorkspace';
 
 // ── constants ─────────────────────────────────────────────────────────────────
 const WF_LABELS = { W1: 'Failed Payment', W2: 'Refund SLA', W3: 'Settlement' };
@@ -1046,6 +1047,7 @@ export default function App() {
   if (checkingSession) return <div className="grid min-h-screen place-items-center text-sm font-semibold text-slate-500">Loading ZeroTouch…</div>;
   if (!user) return <LoginScreen onLogin={handleLogin}/>;
   if (user.role === 'CUSTOMER') return <CustomerPortal user={user} onLogout={handleLogout}/>;
+  if (user.role === 'EMPLOYEE') return <EmployeeWorkspace user={user} onLogout={handleLogout}/>;
   return <ZeroTouchWorkforceWorkspace user={user} isAdmin={user.role === 'ADMIN'} onLogout={handleLogout}/>;
 }
 

@@ -108,7 +108,7 @@ export default function LoginScreen({ onLogin }) {
                 className="flex items-center justify-center gap-2 p-3 bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200 rounded-xl text-xs font-bold transition disabled:opacity-50"
               >
                 <Users size={14} className="text-purple-600" />
-                Support Ops Portal
+                Admin Workspace
               </button>
               <button
                 type="button"

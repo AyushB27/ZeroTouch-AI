@@ -58,6 +58,10 @@ export function logout() {
 }
 
 export const getCurrentUser = () => request('/auth/me');
+export const sendAssistantMessage = (message, department = 'all', conversationId = null) =>
+  request('/assistant', { method: 'POST', timeout: 45000, headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, department, conversation_id: conversationId }) });
+export const getAssistantConversation = conversationId => request(`/assistant/conversations/${encodeURIComponent(conversationId)}`);
 export const getCustomerProfile = () => request('/customer/profile');
 export const getCustomerTransactions = () => request('/customer/transactions');
 export const getCustomerCases = () => request('/customer/cases');
@@ -65,6 +69,10 @@ export const getCustomerRefunds = () => request('/customer/refunds');
 export const getCustomerMessages = () => request('/customer/messages');
 export const sendChat = message => request('/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }) });
 export const getAdminAuditLogs = () => request('/admin/audit-logs');
+export const getAdminEnterpriseOverview = () => request('/admin/enterprise-overview');
+export const decideAccessRequest = (requestId, decision, notes = '') => request(`/admin/access-requests/${encodeURIComponent(requestId)}/decision`, {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, notes }),
+});
 export const getOpsCases = () => request('/ops/cases');
 export const getOpsCase = identifier => request(`/ops/cases/${encodeURIComponent(identifier)}`);
 export const getEvaluationReport = () => request('/admin/evaluation', { timeout: 20000 });

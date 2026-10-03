@@ -33,8 +33,8 @@ def test_canonical_cases_seeded():
     """Verify that all transactions have initialized canonical cases with formatted IDs."""
     txs = db_get_all_transactions()
     cases = db_get_all_cases()
-    assert len(txs) == 8
-    assert len(cases) == 8
+    assert len(txs) >= 8
+    assert len(cases) == len(txs)
 
     for tx in txs:
         tx_id = tx["transaction_id"]

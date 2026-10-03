@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Request, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select, func
 from typing import Optional, List, Dict, Any
 import json
 import hashlib
@@ -35,6 +36,8 @@ from backend.database import (
     db_update_case_by_tx,
     db_get_customers,
     db_get_customer,
+    db_get_customer_by_email,
+    db_get_employee_by_email,
     db_get_tickets,
     db_create_ticket,
     db_get_ticket,
@@ -47,12 +50,18 @@ from backend.database import (
     db_create_refund,
     db_update_refund,
     db_get_workforce_tasks,
+    engine, customers_table, employees_table, departments_table, conversations_table,
+    tasks_table, support_tickets_table, transactions_table, refunds_table,
+    audit_logs_table, knowledge_documents_table, expenses_table, it_tickets_table,
+    access_requests_table, onboarding_plans_table, training_assignments_table,
+    sales_leads_table, campaigns_table,
 )
 from backend.action_gateway import ActionGateway
 from backend.orchestrator import run_resolution
 from backend.rag import init_rag
 from contextlib import asynccontextmanager
 from backend.auth import SESSIONS, current_user, require_customer, require_employee, require_admin
+from backend.enterprise_assistant import handle_employee_message, get_conversation
 
 
 @asynccontextmanager
@@ -71,7 +80,7 @@ DEMO_USERS = {
     "vansh@zerotouch.demo": {"password": "demo123", "role": "CUSTOMER", "name": "Vansh", "id": "cust-vansh", "email": "vansh@zerotouch.demo"},
     "support@zerotouch.demo": {"password": "demo123", "role": "ADMIN", "name": "Support Agent", "id": "admin-support", "email": "support@zerotouch.demo"},
     "admin@zerotouch.demo": {"password": "demo123", "role": "ADMIN", "name": "Ops Admin", "id": "admin-ops", "email": "admin@zerotouch.demo"},
-    "employee@zerotouch.demo": {"password": "demo123", "role": "EMPLOYEE", "name": "Aarav Sharma", "id": "emp-support", "email": "employee@zerotouch.demo"},
+    "employee@zerotouch.demo": {"password": "demo123", "role": "EMPLOYEE", "name": "Aarav Sharma", "id": "emp-aarav", "email": "employee@zerotouch.demo"},
     "hr@zerotouch.demo": {"password": "demo123", "role": "EMPLOYEE", "name": "Kavita Rao", "id": "emp-hr", "email": "hr@zerotouch.demo"},
 }
 
@@ -79,6 +88,17 @@ DEMO_USERS = {
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+
+class EmployeeAssistantRequest(BaseModel):
+    message: str
+    department: str = "all"
+    conversation_id: Optional[str] = None
+
+
+class AccessDecisionRequest(BaseModel):
+    decision: str
+    notes: str = ""
 
 
 app.add_middleware(
@@ -110,6 +130,16 @@ def login(credentials: LoginRequest):
     raw_email = credentials.email.strip().lower()
     account = DEMO_USERS.get(raw_email)
 
+    if not account:
+        customer = db_get_customer_by_email(raw_email)
+        employee = db_get_employee_by_email(raw_email)
+        if customer:
+            account = {"password": "demo123", "role": "CUSTOMER", "name": customer["name"],
+                       "id": customer["customer_id"], "email": customer["email"]}
+        elif employee:
+            account = {"password": "demo123", "role": "EMPLOYEE", "name": employee["name"],
+                       "id": employee["employee_id"], "email": employee["email"]}
+
     if not account or not secrets.compare_digest(credentials.password, account["password"]):
         raise HTTPException(status_code=401, detail="Email or password is incorrect")
 
@@ -133,6 +163,16 @@ def logout(authorization: Optional[str] = Header(None)):
     token = authorization.removeprefix("Bearer ") if authorization else ""
     SESSIONS.pop(token, None)
     return {"status": "ok"}
+
+
+@app.post("/api/assistant")
+async def employee_assistant(payload: EmployeeAssistantRequest, user=Depends(require_employee)):
+    return await handle_employee_message(user, payload.message, payload.department, payload.conversation_id)
+
+
+@app.get("/api/assistant/conversations/{conversation_id}")
+def employee_assistant_conversation(conversation_id: str, user=Depends(require_employee)):
+    return get_conversation(user, conversation_id)
 
 
 # ── Transactions ──────────────────────────────────────────────────────────────
@@ -309,6 +349,23 @@ def customer_chat(payload: CustomerChatMessage, user=Depends(require_customer)):
 
     owned_tx_ids = {case["transaction_id"] for case in db_get_all_cases() if case["customer_id"] == user["id"]}
     transactions = {tx["transaction_id"]: tx for tx in db_get_all_transactions() if tx["transaction_id"] in owned_tx_ids}
+    if "refund" in message.lower() and any(word in message.lower() for word in ("where", "status", "received", "track", "check")):
+        refunds = db_get_refunds(user["id"])
+        refund_id = re.search(r"\bRFD-[A-Z0-9-]+\b", message.upper())
+        tx_ref = re.search(r"\bTX\d{4,6}\b", message.upper())
+        refund = next((item for item in refunds if (refund_id and item["refund_id"] == refund_id.group(0))
+                       or (tx_ref and item["transaction_id"] == tx_ref.group(0))), None)
+        if not refund and not refund_id and not tx_ref and refunds:
+            refund = refunds[0]
+        db_add_message(user["id"], "customer", message)
+        if refund:
+            reply = f"Your refund for {refund['transaction_id']} is {refund['status'].lower()}."
+            response = {"status": refund["status"], "refund": refund, "reply": reply}
+        else:
+            reply = "I couldn't find a refund linked to your account. Share the payment transaction ID and I’ll check it."
+            response = {"status": "NOT_FOUND", "refund": None, "reply": reply}
+        db_add_message(user["id"], "assistant", reply)
+        return response
     explicit = re.search(r"\b(?:TX\d{4}|RF\d{3}|S\d{3})\b", message.upper())
     tx_id = explicit.group(0) if explicit and explicit.group(0) in transactions else None
 
@@ -598,6 +655,60 @@ def admin_dashboard(_user=Depends(require_admin)):
         "cases": cases,
         "transactions": rows,
     }
+
+
+@app.get("/api/admin/enterprise-overview")
+def admin_enterprise_overview(_user=Depends(require_admin)):
+    tables = {
+        "customers": customers_table, "employees": employees_table, "departments": departments_table,
+        "conversations": conversations_table, "tasks": tasks_table, "tickets": support_tickets_table,
+        "transactions": transactions_table, "refunds": refunds_table, "knowledge": knowledge_documents_table,
+        "expenses": expenses_table, "it_requests": it_tickets_table, "access_requests": access_requests_table,
+        "onboarding": onboarding_plans_table, "training": training_assignments_table, "audit": audit_logs_table,
+        "leads": sales_leads_table, "campaigns": campaigns_table,
+    }
+    with engine.connect() as conn:
+        counts = {key: conn.execute(select(func.count()).select_from(table)).scalar_one()
+                  for key, table in tables.items()}
+        rows = {}
+        for key, table in tables.items():
+            ordering = table.c.timestamp if key == "audit" else table.c.updated_at if key == "tasks" else table.c.created_at if "created_at" in table.c else None
+            query = table.select().order_by(ordering.desc()).limit(100) if ordering is not None else table.select().limit(100)
+            rows[key] = [dict(row) for row in conn.execute(query).mappings().all()]
+    for row in rows["tasks"]:
+        if row.get("payload"):
+            try: row.update(json.loads(row["payload"]))
+            except (TypeError, json.JSONDecodeError): pass
+    agent_names = ["Supervisor Agent", "Finance Agent", "HR Agent", "IT Agent", "Customer Support Agent",
+                   "Analytics Agent", "Sales Agent", "Marketing Agent", "Operations Agent", "Knowledge Agent", "Escalation Agent"]
+    return {"metrics": counts, "records": rows,
+            "agents": [{"name": name, "status": "READY", "mode": "Registered tools"} for name in agent_names],
+            "settings": {"grok_enabled": bool(os.getenv("XAI_API_KEY")), "grok_model": os.getenv("XAI_MODEL", "grok-4.7"),
+                         "database": "PostgreSQL" if os.getenv("DATABASE_URL", "").startswith("postgres") else "SQLite"}}
+
+
+@app.post("/api/admin/access-requests/{request_id}/decision")
+def admin_access_request_decision(request_id: str, payload: AccessDecisionRequest, user=Depends(require_admin)):
+    decision = payload.decision.strip().upper()
+    if decision not in ("APPROVE", "REJECT"):
+        raise HTTPException(status_code=422, detail="Decision must be APPROVE or REJECT")
+    with engine.begin() as conn:
+        row = conn.execute(access_requests_table.select().where(access_requests_table.c.request_id == request_id)).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Access request not found")
+        if row["status"] != "PENDING_APPROVAL":
+            raise HTTPException(status_code=409, detail="Access request has already been reviewed")
+        status = "APPROVED" if decision == "APPROVE" else "REJECTED"
+        request_data = json.loads(row["payload"])
+        request_data.update({"status": status, "reviewed_by": user["name"], "review_notes": payload.notes[:500],
+                             "reviewed_at": datetime.now(timezone.utc).isoformat()})
+        conn.execute(access_requests_table.update().where(access_requests_table.c.request_id == request_id).values(
+            status=status, payload=json.dumps(request_data)))
+        conn.execute(audit_logs_table.insert().values(audit_id=f"AUD-{uuid4().hex[:14].upper()}",
+            timestamp=request_data["reviewed_at"], user_id=user["id"], agent="Admin Reviewer", tool="access_request_decision",
+            action=decision, entity_type="access_request", entity_id=request_id, status="SUCCESS",
+            result_summary=f"{status} least-privilege access request for {row['system_name']}"))
+    return request_data
 
 
 @app.get("/api/admin/audit-logs")

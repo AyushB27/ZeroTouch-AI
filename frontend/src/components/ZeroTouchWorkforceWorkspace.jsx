@@ -6,6 +6,7 @@ import SkillStudio from './SkillStudio';
 import ManagerDashboard from './ManagerDashboard';
 import FinanceReconciliation from './FinanceReconciliation';
 import AcademySandbox from './AcademySandbox';
+import AdminConsole from './AdminConsole';
 import {
   getWorkforceRoles, getWorkforceTasks, getWorkforceGovernorState,
   toggleWorkforceKillSwitch, resetWorkforcePlatform
@@ -65,7 +66,7 @@ const DEFAULT_ROLES = [
 export default function ZeroTouchWorkforceWorkspace({ user, isAdmin = false, onLogout }) {
   const [roles, setRoles] = useState(DEFAULT_ROLES);
   const [currentRole, setCurrentRole] = useState(() => isAdmin ? DEFAULT_ROLES.find(role => role.role_id === 'manager') : DEFAULT_ROLES[0]);
-  const [activeTab, setActiveTab] = useState(isAdmin ? 'dashboard' : 'inbox');
+  const [activeTab, setActiveTab] = useState(isAdmin ? 'overview' : 'inbox');
   const [tasks, setTasks] = useState([]);
   const [killSwitchActive, setKillSwitchActive] = useState(false);
   const [commandBarOpen, setCommandBarOpen] = useState(false);
@@ -163,6 +164,9 @@ export default function ZeroTouchWorkforceWorkspace({ user, isAdmin = false, onL
 
       {/* ── Main Domain Workspace Canvas ── */}
       <div className="flex-1 flex overflow-hidden relative">
+        {isAdmin && ['overview','customers','employees','conversations','tasks','tickets','transactions','refunds','access_requests','agents','knowledge','leads','campaigns','audit','settings'].includes(activeTab) && (
+          <AdminConsole view={activeTab}/>
+        )}
         {activeTab === 'inbox' && (
           <TaskInbox
             tasks={tasks}
