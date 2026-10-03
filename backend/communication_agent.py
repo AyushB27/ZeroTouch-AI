@@ -18,9 +18,8 @@ load_dotenv()
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 CANDIDATE_MODELS = [
-    "gemini-3.5-flash-lite",
-    "gemini-flash-latest",
-    "gemini-3.1-flash-lite",
+    "gemini-3.8-flash",
+    "gemini-2.0-flash",
 ]
 
 def generate_dynamic_message(
@@ -70,7 +69,10 @@ def generate_dynamic_message(
                     f"LLM synthesized personalized message ({model}, {len(msg.split())} words)"
                 )
                 return msg
-            except Exception:
+            except Exception as e:
+                err_str = str(e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "quota" in err_str.lower():
+                    break
                 continue
 
     return _contextual_dynamic_compose(
@@ -88,12 +90,12 @@ def _gemini_compose_message(
     action_id: str,
     reason: str,
     api_key: str,
-    model: str = "gemini-3.5-flash-lite"
+    model: str = "gemini-3.8-flash"
 ) -> str:
     from google import genai
     from google.genai import types
 
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(api_key=api_key, http_options={"timeout": 6000})
 
     customer_outcomes = {
         "AUTO_REVERSAL": "A reversal was initiated and independently verified.",

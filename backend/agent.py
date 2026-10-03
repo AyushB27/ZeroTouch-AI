@@ -21,11 +21,10 @@ from backend.tools.network import check_network_status
 from backend.tools.merchant import check_merchant_ledger
 from backend.tools.settlement import check_settlement
 
-# Priority order of stable, non-overloaded Gemini models supporting tool calling
+# Priority order of stable Gemini models supporting tool calling
 CANDIDATE_MODELS = [
-    "gemini-3.5-flash-lite",
-    "gemini-flash-latest",
-    "gemini-3.1-flash-lite",
+    "gemini-3.8-flash",
+    "gemini-2.0-flash",
 ]
 
 
@@ -42,18 +41,22 @@ def investigate_transaction(tx_id: str, tx: dict, log_func) -> str:
             try:
                 return _gemini_tool_investigate(tx_id, tx, log_func, api_key, model=model)
             except Exception as e:
-                # Silently try next model if 503 or 404 occurs
+                # If rate-limited (429) or quota exhausted, immediately break to fast deterministic fallback
+                err_str = str(e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "quota" in err_str.lower():
+                    log_func("INVESTIGATION", "gemini_rate_limited", "INFO", "Gemini API quota reached. Using deterministic investigation engine.")
+                    break
                 continue
 
     # Deterministic fallback: manually fetch and log, then return clear narrative
     return _deterministic_investigate(tx_id, tx, log_func)
 
 
-def _gemini_tool_investigate(tx_id: str, tx: dict, log_func, api_key: str, model: str = "gemini-3.5-flash-lite") -> str:
+def _gemini_tool_investigate(tx_id: str, tx: dict, log_func, api_key: str, model: str = "gemini-3.8-flash") -> str:
     from google import genai
     from google.genai import types
 
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(api_key=api_key, http_options={"timeout": 6000})
 
     # Wrap tools to include live logging
     def tool_check_bank_status() -> dict:

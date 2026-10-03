@@ -1,6 +1,8 @@
-﻿.env
+.env
 zerotouch.db
 backend/test_db.py
 node_modules/
 __pycache__/
 *.pyc
+.pytest_cache/
+dist/

@@ -4,27 +4,40 @@ LangGraph Multi-Agent Stateful Orchestration for ZeroTouch.
 Segregated Multi-Agent Pipeline:
   1. 🕵️ Ledger Investigator Agent (queries Bank, NPCI, Merchant, Settlement)
   2. 📊 Risk & Credit Profiling Agent (evaluates CIBIL score, First-Time User status, ceilings)
-  3. ⚖️ Policy & Compliance Agent (RAG knowledge base + deterministic policy logic)
-  4. ✍️ Dynamic Communication Agent (NO PRE-BUILT MESSAGES - dynamically writes via LLM)
-  5. ⚙️ Action & Verification Nodes (executes ledger updates and independent verification)
+  3. ⚖️ Policy & Compliance Agent (RAG knowledge base + deterministic policy logic + Exception Taxonomy)
+  4. 🛡️ Action Gateway (Idempotency, lifecycle tracking, independent verification)
+  5. ✍️ Dynamic Communication Agent (NO PRE-BUILT MESSAGES - dynamically writes via LLM)
+  6. 🔄 Canonical Case Synchronization (Single source of truth between Customer and Ops)
 """
 
+import json
 import operator
 from typing import TypedDict, List, Optional, Annotated
+from datetime import datetime, timezone
 
 from langgraph.graph import StateGraph, END
 
-from backend.models import Evidence, AuditEvent, ResolutionResult, PolicyDecision, RiskAssessment
+from backend.models import (
+    Evidence,
+    EvidenceMatrix,
+    AuditEvent,
+    ResolutionResult,
+    PolicyDecision,
+    RiskAssessment,
+    AuditVisibility,
+)
 from backend.policy import evaluate_policy
 from backend.database import (
-    db_get_transaction, db_update_transaction, db_add_event, db_get_events
+    db_get_transaction,
+    db_update_transaction,
+    db_add_event,
+    db_get_events,
+    case_id_for_tx,
+    db_get_case_by_tx,
+    db_update_case_by_tx,
 )
-from backend.tools.actions import initiate_reversal, verify_resolution
+from backend.action_gateway import ActionGateway
 from backend.tools.notifications import create_support_case
-from backend.tools.w2_w3_actions import (
-    chase_bank_sla, offer_wallet_credit,
-    generate_itemized_explanation, flag_compliance_hold,
-)
 from backend.agent import investigate_transaction
 from backend.risk_agent import assess_risk_and_credit
 from backend.communication_agent import generate_dynamic_message
@@ -34,9 +47,11 @@ from backend.communication_agent import generate_dynamic_message
 
 class ResolutionState(TypedDict):
     tx_id: str
+    case_id: str
     tx: dict
     events: Annotated[List[dict], operator.add]   # append-only list
     evidence: Optional[dict]
+    evidence_matrix: Optional[dict]
     risk_assessment: Optional[dict]                # Risk & Credit Agent assessment
     policy: Optional[dict]                         # PolicyDecision as dict
     action_id: Optional[str]
@@ -52,16 +67,16 @@ class ResolutionState(TypedDict):
 
 # ── Helper ────────────────────────────────────────────────────────────────────
 
-def _log(state: ResolutionState, event_type, step, status, message) -> dict:
-    e = db_add_event(state["tx_id"], event_type, step, status, message)
+def _log(state: ResolutionState, event_type, step, status, message, visibility="INTERNAL", actor="ZeroTouch Agent") -> dict:
+    e = db_add_event(state["tx_id"], event_type, step, status, message, visibility=visibility, actor=actor)
     return e
 
 
 def _make_log(state):
     """Returns a log callback that appends to DB AND to state events."""
     collected = []
-    def log(et, step, st, msg):
-        e = _log(state, et, step, st, msg)
+    def log(et, step, st, msg, visibility="INTERNAL", actor="ZeroTouch Agent"):
+        e = _log(state, et, step, st, msg, visibility=visibility, actor=actor)
         collected.append(e)
         return e
     return log, collected
@@ -72,16 +87,36 @@ def _make_log(state):
 def node_investigate_ledgers(state: ResolutionState) -> dict:
     tx_id = state["tx_id"]
     tx = state["tx"]
+    cid = state.get("case_id") or case_id_for_tx(tx_id)
 
     log, collected = _make_log(state)
     log("INVESTIGATION", "investigator_agent_start", "INFO",
-        f"[Ledger Investigator Agent] Initiating multi-system ledger query for {tx_id}")
+        f"[Ledger Investigator Agent] Initiating multi-system ledger query for {tx_id} (Case: {cid})",
+        actor="Ledger Investigator Agent")
     log("INVESTIGATION", "load_transaction", "SUCCESS",
-        f"Transaction {tx_id} loaded: ₹{tx['amount']:,.0f} | Customer: {tx.get('customer_name', 'User')}")
+        f"Transaction {tx_id} loaded: ₹{tx['amount']:,.0f} | Customer: {tx.get('customer_name', 'User')}",
+        actor="Ledger Investigator Agent")
 
     narrative = investigate_transaction(tx_id, tx, log)
     log("INVESTIGATION", "narrative_complete", "SUCCESS",
-        "[Ledger Investigator Agent] Ledger reconciliation complete. Discrepancy isolated.")
+        "[Ledger Investigator Agent] Multi-ledger query complete. Four systems reconciled.",
+        actor="Ledger Investigator Agent")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    evidence_matrix = EvidenceMatrix(
+        transaction_id=tx_id,
+        bank_status=tx["bank_status"],
+        network_status=tx["network_status"],
+        merchant_status=tx["merchant_status"],
+        settlement_status=tx["settlement_status"],
+        queried_at=now_iso,
+        provenance={
+            "bank": "CoreBank-NPCI-Gateway",
+            "network": "NPCI-UPI-2.0",
+            "merchant": "Paytm-Merchant-Ledger",
+            "settlement": "Nodal-Settlement-Engine",
+        }
+    )
 
     evidence = Evidence(
         transaction_id=tx_id,
@@ -97,8 +132,17 @@ def node_investigate_ledgers(state: ResolutionState) -> dict:
         previous_refund=tx["previous_refund"],
     )
 
+    # Sync canonical case state
+    db_update_case_by_tx(
+        tx_id,
+        evidence_matrix=json.dumps(evidence_matrix.model_dump()),
+        customer_status="INVESTIGATING",
+        ops_status="PENDING",
+    )
+
     return {
         "evidence": evidence.model_dump(),
+        "evidence_matrix": evidence_matrix.model_dump(),
         "investigation_narrative": narrative,
         "events": collected,
     }
@@ -108,12 +152,19 @@ def node_investigate_ledgers(state: ResolutionState) -> dict:
 
 def node_risk_and_credit(state: ResolutionState) -> dict:
     tx = state["tx"]
+    tx_id = state["tx_id"]
     log, collected = _make_log(state)
 
     log("RISK_ANALYSIS", "risk_agent_start", "INFO",
-        "[Risk & Credit Agent] Profiling customer creditworthiness, CIBIL score, and tenure...")
+        "[Risk & Credit Agent] Profiling customer creditworthiness, CIBIL score, and tenure...",
+        actor="Risk & Credit Profiling Agent")
 
     risk_assessment: RiskAssessment = assess_risk_and_credit(tx, log)
+
+    db_update_case_by_tx(
+        tx_id,
+        risk_assessment=json.dumps(risk_assessment.model_dump()),
+    )
 
     return {
         "risk_assessment": risk_assessment.model_dump(),
@@ -125,15 +176,24 @@ def node_risk_and_credit(state: ResolutionState) -> dict:
 
 def node_policy(state: ResolutionState) -> dict:
     evidence = Evidence(**state["evidence"])
+    tx_id = state["tx_id"]
     log, collected = _make_log(state)
 
     log("POLICY", "policy_agent_start", "INFO",
-        "[Policy & Compliance Agent] Cross-referencing RAG refund policy with ledger evidence and credit tier...")
+        "[Policy & Compliance Agent] Cross-referencing refund policy with ledger evidence and credit tier...",
+        actor="Policy & Compliance Agent")
 
     decision: PolicyDecision = evaluate_policy(evidence)
 
     log("POLICY", "evaluate_policy", "SUCCESS",
-        f"[Policy Agent] Verdict: {decision.decision} | Authorized: {decision.authorized}")
+        f"[Policy Agent] Verdict: {decision.decision} | Rule: {decision.rule_id} (v{decision.rule_version}) | Classification: {decision.classification}",
+        actor="Policy & Compliance Agent")
+
+    db_update_case_by_tx(
+        tx_id,
+        policy_decision=json.dumps(decision.model_dump()),
+        classification=decision.classification,
+    )
 
     return {
         "policy": decision.model_dump(),
@@ -147,76 +207,99 @@ def route_decision(state: ResolutionState) -> str:
     return state["policy"]["decision"]
 
 
-# ── Action Nodes ──────────────────────────────────────────────────────────────
+# ── Action Nodes (Routed through Action Gateway) ──────────────────────────────
 
 def node_act_reverse(state: ResolutionState) -> dict:
     tx_id = state["tx_id"]
+    policy = state["policy"]
     log, collected = _make_log(state)
 
     log("ACTION", "initiate_reversal", "INFO",
-        f"Policy authorized auto-reversal for {tx_id}")
-    reversal = initiate_reversal(tx_id)
-    action_id = reversal["action_id"]
+        f"Policy authorized auto-reversal for {tx_id} under {policy.get('rule_id', 'RULE_DEFAULT')}",
+        actor="Action Gateway")
 
-    if reversal["status"] == "ALREADY_EXECUTED":
-        log("ACTION", "initiate_reversal", "INFO",
-            f"Reversal already executed: {action_id}")
-    else:
-        log("ACTION", "initiate_reversal", "SUCCESS",
-            f"Reversal {action_id} created and applied to bank ledger")
+    res = ActionGateway.execute_action(
+        tx_id=tx_id,
+        action_type="AUTO_REVERSAL",
+        payload={"amount": state["tx"]["amount"]},
+        policy_version=policy.get("rule_version", "2.0"),
+        rule_id=policy.get("rule_id", "RULE_DEFAULT"),
+        actor="Action Gateway",
+    )
+    action_id = res["action_id"]
 
-    return {"action_id": action_id, "events": collected}
+    return {
+        "action_id": action_id,
+        "verification_status": "VERIFIED" if res.get("verified") else "FAILED",
+        "events": collected,
+    }
 
 
 def node_verify(state: ResolutionState) -> dict:
     tx_id = state["tx_id"]
     log, collected = _make_log(state)
 
-    log("VERIFICATION", "verify_resolution", "INFO",
-        "Independently verifying reversal across core ledgers...")
-    result = verify_resolution(tx_id)
+    # Re-verify via ActionGateway independent verification
+    verification = ActionGateway.verify_action(
+        tx_id=tx_id,
+        action_type="AUTO_REVERSAL",
+        action_ref=state.get("action_id", f"REV-{tx_id}"),
+        actor="Independent Verifier",
+    )
 
-    if result["verified"]:
-        log("VERIFICATION", "verify_resolution", "SUCCESS",
-            "Resolution independently verified across all ledgers")
+    if verification["verified"]:
         return {"verification_status": "VERIFIED", "events": collected}
     else:
-        log("VERIFICATION", "verify_resolution", "FAILED",
-            "Verification failed — escalating to human review")
         return {"verification_status": "FAILED", "events": collected}
 
 
 def node_act_sla(state: ResolutionState) -> dict:
     tx_id = state["tx_id"]
+    policy = state["policy"]
     log, collected = _make_log(state)
 
-    log("ACTION", "chase_bank_sla", "INFO",
-        f"Refund SLA exceeded. Triggering bank escalation API for {tx_id}")
-    result = chase_bank_sla(tx_id)
-    log("ACTION", "chase_bank_sla", "SUCCESS",
-        f"Bank SLA escalation raised: {result['chase_ref']}. ETA: {result['eta_hours']}h")
+    res = ActionGateway.execute_action(
+        tx_id=tx_id,
+        action_type="SLA_CHASE",
+        payload={"amount": state["tx"]["amount"]},
+        policy_version=policy.get("rule_version", "2.0"),
+        rule_id=policy.get("rule_id", "RULE_DEFAULT"),
+        actor="Action Gateway",
+    )
 
-    return {"action_id": result["chase_ref"], "events": collected}
+    return {
+        "action_id": res["action_id"],
+        "verification_status": "VERIFIED" if res.get("verified") else "FAILED",
+        "events": collected,
+    }
 
 
 def node_act_wallet(state: ResolutionState) -> dict:
     tx_id = state["tx_id"]
     tx = state["tx"]
+    policy = state["policy"]
     log, collected = _make_log(state)
 
-    ft_text = " (First-Time User priority)" if tx.get("is_first_time_user") else ""
-    log("ACTION", "offer_wallet_credit", "INFO",
-        f"Destination account bounced. Crediting Paytm Wallet for {tx_id}{ft_text}")
-    result = offer_wallet_credit(tx_id, tx["amount"])
-    log("ACTION", "offer_wallet_credit", "SUCCESS",
-        f"₹{tx['amount']:,.0f} credited to Paytm Wallet: {result['credit_ref']}")
+    res = ActionGateway.execute_action(
+        tx_id=tx_id,
+        action_type="WALLET_CREDIT_OFFER",
+        payload={"amount": tx["amount"]},
+        policy_version=policy.get("rule_version", "2.0"),
+        rule_id=policy.get("rule_id", "RULE_DEFAULT"),
+        actor="Action Gateway",
+    )
 
-    return {"action_id": result["credit_ref"], "events": collected}
+    return {
+        "action_id": res["action_id"],
+        "verification_status": "VERIFIED" if res.get("verified") else "FAILED",
+        "events": collected,
+    }
 
 
 def node_act_itemize(state: ResolutionState) -> dict:
     tx_id = state["tx_id"]
     tx = state["tx"]
+    policy = state["policy"]
     log, collected = _make_log(state)
 
     try:
@@ -226,29 +309,41 @@ def node_act_itemize(state: ResolutionState) -> dict:
     except (ValueError, IndexError):
         fee, gst = 0.0, 0.0
 
-    log("ACTION", "generate_itemized_explanation", "INFO",
-        f"Settlement shortfall detected. Generating itemized reconciliation for {tx_id}")
-    result = generate_itemized_explanation(tx_id, tx["amount"], fee, gst)
-    log("ACTION", "generate_itemized_explanation", "SUCCESS",
-        f"Itemized breakdown sent to merchant: gross ₹{result['gross_amount']:,.0f}, platform fee ₹{fee:,.0f}, GST ₹{gst:,.0f}, net ₹{result['net_settled']:,.0f}. Ref {result['explanation_ref']}.")
+    res = ActionGateway.execute_action(
+        tx_id=tx_id,
+        action_type="ITEMIZED_EXPLANATION",
+        payload={"amount": tx["amount"], "fee": fee, "gst": gst},
+        policy_version=policy.get("rule_version", "2.0"),
+        rule_id=policy.get("rule_id", "RULE_DEFAULT"),
+        actor="Action Gateway",
+    )
 
-    return {"action_id": result["explanation_ref"], "events": collected}
+    return {
+        "action_id": res["action_id"],
+        "verification_status": "VERIFIED" if res.get("verified") else "FAILED",
+        "events": collected,
+    }
 
 
 def node_act_hold(state: ResolutionState) -> dict:
     tx_id = state["tx_id"]
+    policy = state["policy"]
     log, collected = _make_log(state)
 
-    reason = state["policy"]["reason"]
-    log("ACTION", "flag_compliance_hold", "INFO",
-        f"KYC/compliance hold detected. Routing {tx_id} to compliance team")
-    result = flag_compliance_hold(tx_id, reason)
-    log("ACTION", "flag_compliance_hold", "SUCCESS",
-        f"Compliance case raised: {result['case_ref']}. Merchant notified to upload renewed KYC.")
+    reason = policy["reason"]
+    res = ActionGateway.execute_action(
+        tx_id=tx_id,
+        action_type="COMPLIANCE_HOLD",
+        payload={"amount": state["tx"]["amount"], "reason": reason},
+        policy_version=policy.get("rule_version", "2.0"),
+        rule_id=policy.get("rule_id", "RULE_DEFAULT"),
+        actor="Action Gateway",
+    )
 
     return {
-        "action_id": result["case_ref"],
-        "escalation_reason": result["reason"],
+        "action_id": res["action_id"],
+        "escalation_reason": reason,
+        "verification_status": "VERIFIED",
         "events": collected,
     }
 
@@ -263,7 +358,6 @@ def node_dynamic_communication(state: ResolutionState) -> dict:
     reason = state["policy"]["reason"]
     log, collected = _make_log(state)
 
-    # Call Dynamic Communication Agent (Gemini synthesis with zero boilerplate)
     dynamic_msg = generate_dynamic_message(
         tx_id=tx_id,
         tx=tx,
@@ -274,8 +368,12 @@ def node_dynamic_communication(state: ResolutionState) -> dict:
     )
 
     db_update_transaction(tx_id, dynamic_message=dynamic_msg)
+    db_update_case_by_tx(tx_id, dynamic_message=dynamic_msg)
+
     log("NOTIFICATION", "send_dynamic_notification", "SUCCESS",
-        f"Personalized notification dispatched via SMS & Paytm In-App Push")
+        "Personalized notification dispatched to customer",
+        visibility=AuditVisibility.CUSTOMER.value,
+        actor="Communication Agent")
 
     return {
         "notification_sent": True,
@@ -293,12 +391,12 @@ def node_escalate(state: ResolutionState) -> dict:
     evidence = state["evidence"]
     suggested = _generate_suggested_resolution(Evidence(**evidence))
 
-    log("ESCALATION", "escalate", "INFO", f"Escalating to human desk: {reason}")
+    log("ESCALATION", "escalate", "INFO", f"Escalating to human desk: {reason}", actor="Escalation Node")
     case = create_support_case(tx_id, reason, evidence, suggested)
     log("ESCALATION", "create_support_case", "SUCCESS",
-        f"HITL support case created: {case['case_id']} (Priority: HIGH)")
+        f"HITL support case created: {case['case_id']} (Priority: HIGH)",
+        actor="Escalation Node")
 
-    # Synthesize escalation note
     dynamic_msg = generate_dynamic_message(
         tx_id=tx_id,
         tx=tx,
@@ -308,6 +406,13 @@ def node_escalate(state: ResolutionState) -> dict:
         log_func=log
     )
     db_update_transaction(tx_id, resolution_status="ESCALATED", dynamic_message=dynamic_msg)
+    db_update_case_by_tx(
+        tx_id,
+        customer_status="HUMAN_REVIEW",
+        ops_status="ESCALATED",
+        human_review_notes=reason,
+        dynamic_message=dynamic_msg,
+    )
 
     return {
         "support_case": case["case_id"],
@@ -326,13 +431,17 @@ def node_close(state: ResolutionState) -> dict:
 
     if policy_decision == "NO_ACTION":
         db_update_transaction(tx_id, resolution_status="NO_ACTION")
+        db_update_case_by_tx(tx_id, customer_status="NO_ACTION", ops_status="NO_ACTION")
         log("INVESTIGATION", "no_action", "INFO",
-            "Transaction is consistent across all systems. No action required.")
+            "Transaction is consistent across all systems. No action required.",
+            actor="Resolution Engine")
         return {"resolution_status": "NO_ACTION", "events": collected}
 
     db_update_transaction(tx_id, resolution_status="RESOLVED")
+    db_update_case_by_tx(tx_id, customer_status="RESOLVED", ops_status="RESOLVED")
     log("INVESTIGATION", "close", "SUCCESS",
-        "Case successfully closed by ZeroTouch. No manual support ticket required.")
+        "Case successfully closed by ZeroTouch. No manual support ticket required.",
+        actor="Resolution Engine")
     return {"resolution_status": "RESOLVED", "events": collected}
 
 
@@ -416,15 +525,19 @@ def run_resolution(tx_id: str) -> ResolutionResult:
     if not tx:
         raise ValueError(f"Transaction {tx_id} not found in database")
 
+    cid = case_id_for_tx(tx_id)
+
     if tx["resolution_status"] != "PENDING":
         events = db_get_events(tx_id)
         return _state_to_result(tx_id, tx, events, already_done=True)
 
     initial_state: ResolutionState = {
         "tx_id": tx_id,
+        "case_id": cid,
         "tx": tx,
         "events": [],
         "evidence": None,
+        "evidence_matrix": None,
         "risk_assessment": None,
         "policy": None,
         "action_id": None,
@@ -443,15 +556,16 @@ def run_resolution(tx_id: str) -> ResolutionResult:
     # Fetch events from DB (source of truth)
     events = db_get_events(tx_id)
     tx_after = db_get_transaction(tx_id)
+    policy_dict = final_state.get("policy") or {}
 
     return ResolutionResult(
         transaction_id=tx_id,
         customer_name=tx.get("customer_name", "Paytm User"),
         cibil_score=tx.get("cibil_score", 750),
         is_first_time_user=tx.get("is_first_time_user", False),
-        decision=final_state["policy"]["decision"],
-        authorized=final_state["policy"]["authorized"],
-        action_id=final_state.get("action_id"),
+        decision=policy_dict.get("decision", tx_after["resolution_status"]),
+        authorized=policy_dict.get("authorized", False),
+        action_id=final_state.get("action_id") or tx_after.get("action_id"),
         verification_status=final_state.get("verification_status"),
         notification_sent=final_state.get("notification_sent", False),
         dynamic_message=final_state.get("dynamic_message") or tx_after.get("dynamic_message"),
@@ -463,6 +577,9 @@ def run_resolution(tx_id: str) -> ResolutionResult:
         escalation_reason=final_state.get("escalation_reason"),
         suggested_resolution=final_state.get("suggested_resolution"),
         agent_powered=True,
+        case_id=cid,
+        rule_id=policy_dict.get("rule_id"),
+        classification=policy_dict.get("classification"),
     )
 
 
@@ -480,15 +597,31 @@ def _state_to_result(tx_id, tx, events, already_done=False) -> ResolutionResult:
         is_first_time_user=tx.get("is_first_time_user", False),
         previous_refund=tx["previous_refund"],
     )
+    cid = case_id_for_tx(tx_id)
+    case = db_get_case_by_tx(tx_id)
+    rule_id = None
+    classification = None
+    decision = tx["resolution_status"]
+    authorized = False
+    if case and case.get("policy_decision"):
+        try:
+            pd = json.loads(case["policy_decision"])
+            rule_id = pd.get("rule_id")
+            classification = pd.get("classification")
+            decision = pd.get("decision", decision)
+            authorized = pd.get("authorized", False)
+        except Exception:
+            pass
+
     return ResolutionResult(
         transaction_id=tx_id,
         customer_name=tx.get("customer_name", "Paytm User"),
         cibil_score=tx.get("cibil_score", 750),
         is_first_time_user=tx.get("is_first_time_user", False),
-        decision=tx["resolution_status"],
-        authorized=False,
+        decision=decision,
+        authorized=authorized,
         action_id=tx.get("action_id"),
-        verification_status=None,
+        verification_status="VERIFIED" if tx.get("action_id") else None,
         notification_sent=False,
         dynamic_message=tx.get("dynamic_message"),
         support_case=None,
@@ -499,6 +632,9 @@ def _state_to_result(tx_id, tx, events, already_done=False) -> ResolutionResult:
         escalation_reason=None,
         suggested_resolution=None,
         agent_powered=True,
+        case_id=cid,
+        rule_id=rule_id,
+        classification=classification,
     )
 
 
