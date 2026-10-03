@@ -1033,7 +1033,6 @@ function OperationsConsole({ onLogout, onSwitchToCustomer }) {
 }
 
 export default function App() {
-  const [viewMode, setViewMode] = useState('workforce'); // 'workforce', 'legacy_customer', 'legacy_ops'
   const [user, setUser] = useState(null);
   const [checkingSession, setCheckingSession] = useState(true);
 
@@ -1044,56 +1043,9 @@ export default function App() {
 
   const handleLogin = async () => setUser(await getCurrentUser());
   const handleLogout = () => { logout(); setUser(null); };
-
-  const handleSwitchToCustomer = async () => {
-    try {
-      const u = await login('ayush@zerotouch.demo', 'demo123');
-      setUser(u);
-      setViewMode('legacy_customer');
-    } catch (e) {
-      console.error('Failed to switch to customer portal', e);
-    }
-  };
-
-  const handleSwitchToOps = async () => {
-    try {
-      const u = await login('support@zerotouch.demo', 'demo123');
-      setUser(u);
-      setViewMode('legacy_ops');
-    } catch (e) {
-      console.error('Failed to switch to support ops console', e);
-    }
-  };
-
-  // Primary Platform: ZeroTouch Workforce
-  if (viewMode === 'workforce') {
-    return (
-      <ZeroTouchWorkforceWorkspace
-        onSwitchToLegacy={() => setViewMode('legacy_ops')}
-      />
-    );
-  }
-
-  // Legacy Views (if toggled)
-  return (
-    <div className="relative h-screen w-screen overflow-hidden flex flex-col">
-      <div className="h-8 bg-slate-900 text-white px-4 flex items-center justify-between text-xs z-50 shrink-0">
-        <span className="font-mono text-cyan-300 text-[11px]">Legacy Mode Active (Payment Engine V2)</span>
-        <button
-          onClick={() => setViewMode('workforce')}
-          className="text-xs font-bold text-amber-300 hover:text-white underline"
-        >
-          ← Return to ZeroTouch Workforce Platform
-        </button>
-      </div>
-      <div className="flex-1 overflow-hidden">
-        {viewMode === 'legacy_customer' ? (
-          <CustomerPortal user={user || { name: 'Ayush' }} onLogout={handleLogout} onSwitchToOps={handleSwitchToOps} />
-        ) : (
-          <OperationsConsole onLogout={handleLogout} onSwitchToCustomer={handleSwitchToCustomer} />
-        )}
-      </div>
-    </div>
-  );
+  if (checkingSession) return <div className="grid min-h-screen place-items-center text-sm font-semibold text-slate-500">Loading ZeroTouch…</div>;
+  if (!user) return <LoginScreen onLogin={handleLogin}/>;
+  if (user.role === 'CUSTOMER') return <CustomerPortal user={user} onLogout={handleLogout}/>;
+  return <ZeroTouchWorkforceWorkspace user={user} isAdmin={user.role === 'ADMIN'} onLogout={handleLogout}/>;
 }
 

@@ -62,10 +62,10 @@ const DEFAULT_ROLES = [
   },
 ];
 
-export default function ZeroTouchWorkforceWorkspace({ onSwitchToLegacy }) {
+export default function ZeroTouchWorkforceWorkspace({ user, isAdmin = false, onLogout }) {
   const [roles, setRoles] = useState(DEFAULT_ROLES);
-  const [currentRole, setCurrentRole] = useState(DEFAULT_ROLES[0]);
-  const [activeTab, setActiveTab] = useState('inbox');
+  const [currentRole, setCurrentRole] = useState(() => isAdmin ? DEFAULT_ROLES.find(role => role.role_id === 'manager') : DEFAULT_ROLES[0]);
+  const [activeTab, setActiveTab] = useState(isAdmin ? 'dashboard' : 'inbox');
   const [tasks, setTasks] = useState([]);
   const [killSwitchActive, setKillSwitchActive] = useState(false);
   const [commandBarOpen, setCommandBarOpen] = useState(false);
@@ -115,6 +115,7 @@ export default function ZeroTouchWorkforceWorkspace({ onSwitchToLegacy }) {
   }
 
   async function handleToggleKillSwitch() {
+    if (!isAdmin) return;
     try {
       const res = await toggleWorkforceKillSwitch(currentRole.name);
       setKillSwitchActive(Boolean(res.kill_switch_active));
@@ -126,6 +127,7 @@ export default function ZeroTouchWorkforceWorkspace({ onSwitchToLegacy }) {
   }
 
   async function handleResetPlatform() {
+    if (!isAdmin) return;
     setIsResetting(true);
     try {
       await resetWorkforcePlatform();
@@ -143,6 +145,9 @@ export default function ZeroTouchWorkforceWorkspace({ onSwitchToLegacy }) {
       {/* ── Global Header & Navigation ── */}
       <WorkforceNavbar
         currentRole={currentRole}
+        isAdmin={isAdmin}
+        user={user}
+        onLogout={onLogout}
         roles={roles}
         onSelectRole={handleSelectRole}
         activeTab={activeTab}
@@ -185,11 +190,13 @@ export default function ZeroTouchWorkforceWorkspace({ onSwitchToLegacy }) {
         )}
 
         {activeTab === 'dashboard' && (
+          isAdmin ? (
           <ManagerDashboard
             currentRole={currentRole}
             killSwitchActive={killSwitchActive}
             onToggleKillSwitch={handleToggleKillSwitch}
           />
+          ) : <div className="m-auto rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-600">Manager reporting is available to administrators.</div>
         )}
       </div>
 
@@ -201,17 +208,6 @@ export default function ZeroTouchWorkforceWorkspace({ onSwitchToLegacy }) {
         onRefreshTasks={loadData}
       />
 
-      {/* ── Bottom Legacy Switcher Pill (Optional) ── */}
-      {onSwitchToLegacy && (
-        <div className="absolute bottom-2 right-4 z-20">
-          <button
-            onClick={onSwitchToLegacy}
-            className="text-[10px] font-bold text-slate-400 hover:text-slate-700 bg-white/80 hover:bg-white px-2 py-1 rounded-md border border-slate-200 transition shadow-2xs"
-          >
-            Switch to Legacy Payment Engine View ↗
-          </button>
-        </div>
-      )}
     </div>
   );
 }

@@ -7,7 +7,7 @@ import {
   User, CreditCard, ChevronDown, CheckSquare, ShieldCheck, HelpCircle
 } from 'lucide-react';
 import {
-  getCustomerCases, getCustomerMessages, getCustomerProfile,
+  getCustomerCases, getCustomerMessages, getCustomerProfile, getCustomerRefunds,
   getCustomerTransactions, sendChat
 } from '../api';
 
@@ -190,6 +190,7 @@ export default function CustomerPortal({ user, onLogout, onSwitchToOps }) {
   const [profile, setProfile] = useState(user);
   const [transactions, setTransactions] = useState([]);
   const [cases, setCases] = useState([]);
+  const [refunds, setRefunds] = useState([]);
   const [messages, setMessages] = useState([]);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
@@ -206,16 +207,18 @@ export default function CustomerPortal({ user, onLogout, onSwitchToOps }) {
   };
 
   async function refresh() {
-    const [p, tx, cs, msgs] = await Promise.all([
+    const [p, tx, cs, msgs, refundRows] = await Promise.all([
       getCustomerProfile(),
       getCustomerTransactions(),
       getCustomerCases(),
-      getCustomerMessages()
+      getCustomerMessages(),
+      getCustomerRefunds()
     ]);
     setProfile(p);
     setTransactions(tx);
     setCases(cs);
     setMessages(msgs);
+    setRefunds(refundRows);
   }
 
   useEffect(() => {
@@ -348,6 +351,29 @@ export default function CustomerPortal({ user, onLogout, onSwitchToOps }) {
                     </button>
                   );
                 })}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <div className="text-[10px] font-extrabold uppercase tracking-wider text-blue-200/70 px-2 mb-2">
+              My Refunds ({refunds.length})
+            </div>
+            {refunds.length === 0 ? (
+              <p className="text-xs text-blue-200/60 px-2 italic">No refunds requested yet.</p>
+            ) : (
+              <div className="space-y-1">
+                {refunds.map(refund => (
+                  <div key={refund.refund_id} className="rounded-lg bg-white/5 px-2.5 py-2 text-[11px] text-blue-100">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono text-cyan-300">{refund.transaction_id}</span>
+                      <span className="font-bold text-emerald-300">{refund.status}</span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between gap-2 text-blue-200/80">
+                      <span className="font-mono">{refund.refund_id}</span><span>{money(refund.amount)}</span>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>

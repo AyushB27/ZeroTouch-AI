@@ -309,6 +309,7 @@ ORIGINAL_WORKFORCE_CASES: List[Dict[str, Any]] = [
         "customer_name": "Nodal Settlement Ledger",
         "customer_id": "fin-ledger",
         "evidence": {
+            "statement_id": "STMT-902",
             "bank_credit": 49000.0,
             "ledger_credit": 50000.0,
             "variance": -1000.0,

@@ -121,6 +121,42 @@ class ConnectorRegistry:
             },
         ]
 
+    @staticmethod
+    def reconcile_discrepancy(statement_id: str, resolution: str, approver: str) -> Dict[str, Any]:
+        """Post a deterministic demo journal only for a matched statement line."""
+        line = next((row for row in ConnectorRegistry.query_bank_statement_lines()
+                     if row["line_id"] == statement_id), None)
+        if not line:
+            raise ConnectorError(f"Statement line {statement_id} was not found")
+        if line["status"] not in ("MATCHED", "MATCHED_WITH_VARIANCE_NOTE"):
+            raise ConnectorError(f"Statement line {statement_id} is not eligible for automatic reconciliation")
+        return {
+            "statement_id": statement_id,
+            "resolution": resolution,
+            "adjustment_ref": f"JRNL-{statement_id}-{resolution}",
+            "status": "POSTED",
+            "verified": True,
+            "posted_by": approver,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+    @staticmethod
+    def schedule_interview_panel(candidate_id: str, approver: str) -> Dict[str, Any]:
+        """Create a simulated panel invite while retaining recruiter sign-off."""
+        evaluation = ConnectorRegistry.get_candidate_evaluation(candidate_id, "Staff Backend Engineer (Payments)")
+        if not evaluation.get("interview_kit_drafted") or evaluation.get("never_auto_reject") is not True:
+            raise ConnectorError("Candidate review guardrails did not pass")
+        invite_id = f"SCHED-{hashlib.sha256(f'{candidate_id}:{approver}'.encode()).hexdigest()[:10].upper()}"
+        return {
+            "candidate_id": candidate_id,
+            "calendar_invite_id": invite_id,
+            "status": "SCHEDULED",
+            "rubric_score": evaluation["total_score_percentage"],
+            "protected_attributes_stripped": evaluation["protected_attributes_stripped"],
+            "scheduled_by": approver,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
     # ── 3. IT Access Domain Connectors (The Live-Taught Skill) ────────────────
 
     @staticmethod

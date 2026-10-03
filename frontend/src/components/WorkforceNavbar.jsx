@@ -8,6 +8,9 @@ import {
 export default function WorkforceNavbar({
   currentRole,
   roles,
+  isAdmin = false,
+  user,
+  onLogout,
   onSelectRole,
   activeTab,
   onSelectTab,
@@ -105,7 +108,7 @@ export default function WorkforceNavbar({
               aria-label="Select employee role"
               className="bg-white/15 hover:bg-white/20 text-white text-xs font-bold rounded-xl px-3 py-1.5 border border-white/20 outline-none cursor-pointer pr-7 appearance-none transition"
             >
-              {roles.map(r => (
+              {roles.filter(r => isAdmin || r.role_id !== 'manager').map(r => (
                 <option key={r.role_id} value={r.role_id} className="text-slate-900 bg-white">
                   {r.avatar} {r.name} ({r.title})
                 </option>
@@ -115,21 +118,23 @@ export default function WorkforceNavbar({
           </div>
 
           {/* Reset Demo Platform */}
-          <button
+          {isAdmin && <button
             onClick={onResetPlatform}
             disabled={isResetting}
             className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-blue-200 hover:text-white border border-white/15 transition disabled:opacity-50"
             title="Reset platform data to clean state"
           >
             <RefreshCw size={14} className={isResetting ? 'animate-spin' : ''} />
-          </button>
+          </button>}
+          <div className="hidden lg:block text-right leading-tight"><div className="text-xs font-bold">{user?.name}</div><div className="text-[10px] text-blue-200">{user?.role === 'ADMIN' ? 'Administrator' : 'Employee'}</div></div>
+          <button onClick={onLogout} className="rounded-lg border border-white/20 px-2.5 py-1.5 text-xs font-semibold hover:bg-white/10">Sign out</button>
         </div>
       </div>
 
       {/* Domain Navigation Tabs */}
       <div className="h-10 px-4 bg-[#05284f]/90 border-t border-white/5 flex items-center justify-between text-xs overflow-x-auto">
         <div className="flex items-center gap-1">
-          <button
+          {isAdmin && <button
             onClick={() => onSelectTab('inbox')}
             className={`px-3 py-1 rounded-lg font-bold transition flex items-center gap-1.5 ${
               activeTab === 'inbox'
@@ -141,7 +146,7 @@ export default function WorkforceNavbar({
             <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-cyan-500 text-white font-mono">
               Pre-Worked
             </span>
-          </button>
+          </button>}
 
           <button
             onClick={() => onSelectTab('studio')}
@@ -179,7 +184,7 @@ export default function WorkforceNavbar({
             <span>🎓 Joiner Sandbox</span>
           </button>
 
-          <button
+          {isAdmin && <button
             onClick={() => onSelectTab('dashboard')}
             className={`px-3 py-1 rounded-lg font-bold transition flex items-center gap-1.5 ${
               activeTab === 'dashboard'
@@ -191,7 +196,7 @@ export default function WorkforceNavbar({
             <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-400 text-slate-900 font-bold">
               1.54 FTE Freed
             </span>
-          </button>
+          </button>}
         </div>
 
         {/* Current Role Banner */}

@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 from typing import Optional, List, Dict, Any
 import json
 import hashlib
@@ -8,6 +9,8 @@ import hmac
 import os
 import re
 import secrets
+from datetime import datetime, timezone
+from uuid import uuid4
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -17,6 +20,7 @@ from backend.database import (
     db_get_transaction,
     db_get_all_transactions,
     db_get_events,
+    db_add_event,
     db_reset_all,
     db_log_webhook,
     db_mark_webhook_processed,
@@ -29,11 +33,26 @@ from backend.database import (
     db_get_all_cases,
     case_id_for_tx,
     db_update_case_by_tx,
+    db_get_customers,
+    db_get_customer,
+    db_get_tickets,
+    db_create_ticket,
+    db_get_ticket,
+    db_get_ticket_by_case,
+    db_update_ticket,
+    db_get_refund,
+    db_get_refund_by_idempotency,
+    db_get_refund_by_transaction,
+    db_get_refunds,
+    db_create_refund,
+    db_update_refund,
+    db_get_workforce_tasks,
 )
 from backend.action_gateway import ActionGateway
 from backend.orchestrator import run_resolution
 from backend.rag import init_rag
 from contextlib import asynccontextmanager
+from backend.auth import SESSIONS, current_user, require_customer, require_employee, require_admin
 
 
 @asynccontextmanager
@@ -45,41 +64,22 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="ZeroTouch Payment Resolution Engine", version="2.0.0", lifespan=lifespan)
 
 
-# Hackathon demo identities. Tokens are issued and role-bound on the server;
-# clients cannot elevate privileges by changing a role field.
+# Development identities. Sessions and roles are stored server-side.
 DEMO_USERS = {
     "ayush@zerotouch.demo": {"password": "demo123", "role": "CUSTOMER", "name": "Ayush", "id": "cust-ayush", "email": "ayush@zerotouch.demo"},
     "ayush.admin@zerotouch.demo": {"password": "demo123", "role": "ADMIN", "name": "Ayush (Ops)", "id": "admin-ayush", "email": "ayush.admin@zerotouch.demo"},
     "vansh@zerotouch.demo": {"password": "demo123", "role": "CUSTOMER", "name": "Vansh", "id": "cust-vansh", "email": "vansh@zerotouch.demo"},
     "support@zerotouch.demo": {"password": "demo123", "role": "ADMIN", "name": "Support Agent", "id": "admin-support", "email": "support@zerotouch.demo"},
     "admin@zerotouch.demo": {"password": "demo123", "role": "ADMIN", "name": "Ops Admin", "id": "admin-ops", "email": "admin@zerotouch.demo"},
+    "employee@zerotouch.demo": {"password": "demo123", "role": "EMPLOYEE", "name": "Aarav Sharma", "id": "emp-support", "email": "employee@zerotouch.demo"},
+    "hr@zerotouch.demo": {"password": "demo123", "role": "EMPLOYEE", "name": "Kavita Rao", "id": "emp-hr", "email": "hr@zerotouch.demo"},
 }
-SESSIONS: dict[str, dict] = {}
 
 
 class LoginRequest(BaseModel):
     email: str
     password: str
 
-
-def current_user(authorization: Optional[str] = Header(None)):
-    token = authorization.removeprefix("Bearer ") if authorization else ""
-    user = SESSIONS.get(token)
-    if not user:
-        raise HTTPException(status_code=401, detail="Please sign in to continue")
-    return user
-
-
-def require_customer(user=Depends(current_user)):
-    if user["role"] != "CUSTOMER":
-        raise HTTPException(status_code=403, detail="Customer access required")
-    return user
-
-
-def require_admin(user=Depends(current_user)):
-    if user["role"] != "ADMIN":
-        raise HTTPException(status_code=403, detail="Support access required")
-    return user
 
 app.add_middleware(
     CORSMiddleware,
@@ -90,7 +90,7 @@ app.add_middleware(
 )
 
 from backend.workforce_router import workforce_router
-app.include_router(workforce_router, prefix="/api/workforce", tags=["Workforce"])
+app.include_router(workforce_router, prefix="/api/workforce", tags=["Workforce"], dependencies=[Depends(require_employee)])
 
 # ── Health ────────────────────────────────────────────────────────────────────
 
@@ -110,17 +110,8 @@ def login(credentials: LoginRequest):
     raw_email = credentials.email.strip().lower()
     account = DEMO_USERS.get(raw_email)
 
-    # Resilient demo fallback: if any custom email/name is entered during judging or demo
-    if not account:
-        role = "ADMIN" if any(k in raw_email for k in ("admin", "support", "ops")) else "CUSTOMER"
-        name_part = raw_email.split("@")[0].replace(".", " ").title()
-        account = {
-            "password": credentials.password or "demo123",
-            "role": role,
-            "name": name_part or "Demo User",
-            "id": f"{role.lower()}-{raw_email.split('@')[0]}",
-            "email": raw_email,
-        }
+    if not account or not secrets.compare_digest(credentials.password, account["password"]):
+        raise HTTPException(status_code=401, detail="Email or password is incorrect")
 
     token = secrets.token_urlsafe(32)
     SESSIONS[token] = {
@@ -192,21 +183,35 @@ class CustomerChatMessage(BaseModel):
     message: str
 
 
+class RefundCreateRequest(BaseModel):
+    transaction_id: str
+    reason: str = "Customer requested refund"
+    idempotency_key: Optional[str] = None
+
+
+class TicketCreateRequest(BaseModel):
+    category: str = "GENERAL"
+    summary: str
+    transaction_id: Optional[str] = None
+
+
 @app.get("/api/customer/profile")
 def customer_profile(user=Depends(require_customer)):
+    stored = db_get_customer(user["id"])
     return {
         "id": user["id"],
-        "name": user["name"],
-        "email": user.get("email", "ayush@zerotouch.demo"),
+        "name": stored["name"] if stored else user["name"],
+        "email": stored["email"] if stored else user.get("email"),
         "tagline": "Your autonomous payment teammate"
     }
 
 
 @app.get("/api/customer/transactions")
-def customer_transactions(_user=Depends(require_customer)):
+def customer_transactions(user=Depends(require_customer)):
     # Deliberately return only customer-facing fields, never internal risk scores or fraud flags.
+    owned_tx_ids = {case["transaction_id"] for case in db_get_all_cases() if case["customer_id"] == user["id"]}
     return [{key: tx[key] for key in ("transaction_id", "amount", "currency", "bank_status", "network_status", "merchant_status", "settlement_status", "resolution_status", "workflow_type", "action_id")}
-            for tx in db_get_all_transactions()]
+            for tx in db_get_all_transactions() if tx["transaction_id"] in owned_tx_ids]
 
 
 @app.get("/api/customer/cases")
@@ -214,6 +219,8 @@ def customer_cases(_user=Depends(require_customer)):
     """Customer-facing case representation with strict internal data segregation."""
     cases = []
     for c in db_get_all_cases():
+        if c["customer_id"] != _user["id"]:
+            continue
         tx = db_get_transaction(c["transaction_id"])
         if not tx:
             continue
@@ -238,6 +245,8 @@ def customer_cases(_user=Depends(require_customer)):
 def customer_case(case_id: str, _user=Depends(require_customer)):
     case = db_get_case(case_id) or db_get_case_by_tx(case_id)
     if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    if case["customer_id"] != _user["id"]:
         raise HTTPException(status_code=404, detail="Case not found")
     tx = db_get_transaction(case["transaction_id"])
     return {
@@ -298,7 +307,8 @@ def customer_chat(payload: CustomerChatMessage, user=Depends(require_customer)):
     if not message or len(message) > 1000:
         raise HTTPException(status_code=422, detail="Message must contain 1–1000 characters")
 
-    transactions = {tx["transaction_id"]: tx for tx in db_get_all_transactions()}
+    owned_tx_ids = {case["transaction_id"] for case in db_get_all_cases() if case["customer_id"] == user["id"]}
+    transactions = {tx["transaction_id"]: tx for tx in db_get_all_transactions() if tx["transaction_id"] in owned_tx_ids}
     explicit = re.search(r"\b(?:TX\d{4}|RF\d{3}|S\d{3})\b", message.upper())
     tx_id = explicit.group(0) if explicit and explicit.group(0) in transactions else None
 
@@ -335,7 +345,7 @@ def customer_chat(payload: CustomerChatMessage, user=Depends(require_customer)):
         reply = "I can check that for you. Which recent payment are you asking about?"
         db_add_message(user["id"], "assistant", reply)
         options = [{key: tx[key] for key in ("transaction_id", "amount", "currency", "resolution_status", "workflow_type")}
-                   for tx in db_get_all_transactions()[:6]]
+                   for tx in transactions.values()][:6]
         return {"needs_selection": True, "reply": reply, "options": options}
 
     db_add_message(user["id"], "customer", message, tx_id)
@@ -348,6 +358,20 @@ def customer_chat(payload: CustomerChatMessage, user=Depends(require_customer)):
         decision = result.decision
         action_id = result.action_id
         status = result.resolution_status
+        if decision == "AUTO_REVERSAL" and status == "RESOLVED" and action_id:
+            refund_key = f"{user['id']}:{tx_id}:refund-v1"
+            if not db_get_refund_by_idempotency(refund_key):
+                now = datetime.now(timezone.utc).isoformat()
+                db_create_refund({
+                    "refund_id": f"RFD-{uuid4().hex[:10].upper()}",
+                    "idempotency_key": refund_key,
+                    "transaction_id": tx_id,
+                    "customer_id": user["id"],
+                    "amount": tx["amount"],
+                    "reason": "Automatic reversal for failed payment",
+                    "status": "VERIFIED", "action_ref": action_id,
+                    "created_at": now, "completed_at": now,
+                })
         if result.dynamic_message:
             reply = result.dynamic_message
         elif decision == "AUTO_REVERSAL":
@@ -377,6 +401,14 @@ def customer_chat(payload: CustomerChatMessage, user=Depends(require_customer)):
             reply = f"Case {cid} is already {status.lower().replace('_', ' ')}. {('Action reference: ' + action_id + '.') if action_id else 'No further action is required.'}"
 
     db_add_message(user["id"], "assistant", reply, tx_id)
+    if status == "ESCALATED" and not db_get_ticket_by_case(cid):
+        now = datetime.now(timezone.utc).isoformat()
+        db_create_ticket({
+            "ticket_id": f"TKT-{uuid4().hex[:10].upper()}", "case_id": cid,
+            "customer_id": user["id"], "category": _issue_for(tx).upper().replace(" ", "_"),
+            "priority": "HIGH", "status": "OPEN", "assigned_team": "Payment Support",
+            "summary": message, "created_at": now, "resolved_at": None,
+        })
     return {
         "transaction_id": tx_id,
         "case_id": cid,
@@ -530,8 +562,12 @@ def human_decision(tx_id: str, decision: HumanDecision, _user=Depends(require_ad
         "REJECT": f"A support agent reviewed case {cid}. No refund was issued; the case is closed without a payment action.",
         "REQUEST_MORE_INFO": f"A support agent is reviewing case {cid} and needs more information before deciding. Please reply here with any details that may help.",
     }
-    for uid in ("cust-ayush", "cust-vansh"):
-        db_add_message(uid, "assistant", customer_updates[decision.action], tx_id)
+    case = db_get_case_by_tx(tx_id)
+    customer_id = case["customer_id"] if case else "cust-ayush"
+    db_add_message(customer_id, "assistant", customer_updates[decision.action], tx_id)
+    ticket = db_get_ticket_by_case(case_id_for_tx(tx_id))
+    if ticket and decision.action in ("APPROVE_REFUND", "REJECT"):
+        db_update_ticket(ticket["ticket_id"], status="RESOLVED", resolved_at=datetime.now(timezone.utc).isoformat())
 
     db_add_event(
         tx_id, "NOTIFICATION", "update_customer_case", "SUCCESS",
@@ -585,6 +621,116 @@ def admin_review_queue(_user=Depends(require_admin)):
                 "timeline": db_get_events(c["transaction_id"]),
             })
     return escalated_cases
+
+
+@app.get("/api/admin/customers")
+def admin_customers(_user=Depends(require_admin)):
+    return db_get_customers()
+
+
+@app.post("/api/refunds/create")
+def create_refund(payload: RefundCreateRequest, user=Depends(require_customer)):
+    tx = db_get_transaction(payload.transaction_id)
+    case = db_get_case_by_tx(payload.transaction_id)
+    if not tx or not case or case["customer_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    idem_key = (payload.idempotency_key or f"{user['id']}:{payload.transaction_id}:refund-v1").strip()
+    if not idem_key or len(idem_key) > 128:
+        raise HTTPException(status_code=422, detail="Idempotency key must contain 1–128 characters")
+    prior = db_get_refund_by_idempotency(idem_key) or db_get_refund_by_transaction(payload.transaction_id)
+    if prior:
+        if prior["customer_id"] != user["id"] or prior["transaction_id"] != payload.transaction_id:
+            raise HTTPException(status_code=409, detail="Idempotency key is already associated with another refund")
+        return prior
+
+    eligible = (
+        tx["bank_status"] == "DEBITED" and tx["network_status"] == "SUCCESS"
+        and tx["merchant_status"] == "NOT_CREDITED" and tx["settlement_status"] == "NOT_FOUND"
+        and tx["risk_score"] < 0.30 and tx["amount"] <= 10000 and not tx["previous_refund"]
+    )
+    if not eligible:
+        raise HTTPException(status_code=409, detail="This transaction is not eligible for an automatic demo refund")
+
+    reason = payload.reason.strip()
+    if not reason or len(reason) > 500:
+        raise HTTPException(status_code=422, detail="Refund reason must contain 1–500 characters")
+    now = datetime.now(timezone.utc).isoformat()
+    refund = {
+        "refund_id": f"RFD-{uuid4().hex[:10].upper()}", "idempotency_key": idem_key,
+        "transaction_id": payload.transaction_id, "customer_id": user["id"],
+        "amount": tx["amount"], "reason": reason, "status": "PROCESSING",
+        "action_ref": None, "created_at": now, "completed_at": None,
+    }
+    try:
+        db_create_refund(refund)
+    except IntegrityError:
+        # A concurrent repeat may have won the unique idempotency/transaction race.
+        prior = db_get_refund_by_idempotency(idem_key) or db_get_refund_by_transaction(payload.transaction_id)
+        if prior and prior["customer_id"] == user["id"]:
+            return prior
+        raise HTTPException(status_code=409, detail="A refund request for this transaction already exists")
+    try:
+        result = ActionGateway.execute_action(
+            payload.transaction_id, "AUTO_REVERSAL", {"amount": tx["amount"]},
+            rule_id="RULE_W1_AUTO_REVERSAL_01", actor=f"Customer {user['id']} via Refund Service",
+        )
+    except Exception as exc:
+        db_update_refund(refund["refund_id"], status="FAILED")
+        raise HTTPException(status_code=503, detail="The refund service could not complete this request") from exc
+    if not result.get("verified"):
+        db_update_refund(refund["refund_id"], status="FAILED", action_ref=result.get("action_id"))
+        raise HTTPException(status_code=409, detail="The reversal could not be verified; the case needs support review")
+    completed = datetime.now(timezone.utc).isoformat()
+    db_update_refund(refund["refund_id"], status="VERIFIED", action_ref=result["action_id"], completed_at=completed)
+    return {**refund, "status": "VERIFIED", "action_ref": result["action_id"], "completed_at": completed}
+
+
+@app.get("/api/refunds/{refund_id}")
+def get_refund(refund_id: str, user=Depends(current_user)):
+    refund = db_get_refund(refund_id)
+    if not refund or (user["role"] == "CUSTOMER" and refund["customer_id"] != user["id"]):
+        raise HTTPException(status_code=404, detail="Refund not found")
+    return refund
+
+
+@app.get("/api/admin/refunds")
+def admin_refunds(_user=Depends(require_admin)):
+    return db_get_refunds()
+
+
+@app.get("/api/customer/refunds")
+def customer_refunds(user=Depends(require_customer)):
+    return db_get_refunds(user["id"])
+
+
+@app.get("/api/tickets")
+def list_tickets(user=Depends(current_user)):
+    return db_get_tickets(user["id"]) if user["role"] == "CUSTOMER" else db_get_tickets()
+
+
+@app.post("/api/tickets")
+def create_ticket(payload: TicketCreateRequest, user=Depends(require_customer)):
+    case = None
+    if payload.transaction_id:
+        case = db_get_case_by_tx(payload.transaction_id)
+        if not case or case["customer_id"] != user["id"]:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+    summary = payload.summary.strip()
+    if not summary:
+        raise HTTPException(status_code=422, detail="Ticket summary is required")
+    now = datetime.now(timezone.utc).isoformat()
+    ticket = db_create_ticket({
+        "ticket_id": f"TKT-{uuid4().hex[:10].upper()}",
+        "case_id": case["case_id"] if case else None, "customer_id": user["id"],
+        "category": payload.category.strip().upper()[:50], "priority": "NORMAL", "status": "OPEN",
+        "assigned_team": "Customer Support", "summary": summary[:1000],
+        "created_at": now, "resolved_at": None,
+    })
+    if case:
+        db_add_event(case["transaction_id"], "ESCALATION", "support_ticket_created", "SUCCESS",
+                     f"Support request {ticket['ticket_id']} created", visibility="INTERNAL", actor=user["name"])
+    return ticket
 
 
 @app.get("/api/admin/evaluation")

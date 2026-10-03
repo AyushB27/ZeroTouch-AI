@@ -130,6 +130,55 @@ conversation_messages_table = Table(
     Column("created_at",     String(50), nullable=False),
 )
 
+# Demo customer directory, transaction-linked refunds, support tickets, and persistent workforce tasks.
+customers_table = Table(
+    "customers", metadata,
+    Column("customer_id", String(50), primary_key=True),
+    Column("name", String(100), nullable=False),
+    Column("email", String(255), unique=True, nullable=False),
+    Column("phone", String(30)),
+    Column("account_status", String(30), default="ACTIVE"),
+    Column("verification_status", String(30), default="VERIFIED"),
+    Column("created_at", String(50), nullable=False),
+)
+
+refunds_table = Table(
+    "refunds", metadata,
+    Column("refund_id", String(60), primary_key=True),
+    Column("idempotency_key", String(128), unique=True, nullable=False),
+    Column("transaction_id", String(50), nullable=False, unique=True, index=True),
+    Column("customer_id", String(50), nullable=False),
+    Column("amount", Float, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("status", String(30), nullable=False),
+    Column("action_ref", String(100)),
+    Column("created_at", String(50), nullable=False),
+    Column("completed_at", String(50)),
+)
+
+support_tickets_table = Table(
+    "support_tickets", metadata,
+    Column("ticket_id", String(60), primary_key=True),
+    Column("case_id", String(50), nullable=True),
+    Column("customer_id", String(50), nullable=False),
+    Column("category", String(50), nullable=False),
+    Column("priority", String(20), nullable=False),
+    Column("status", String(30), nullable=False),
+    Column("assigned_team", String(80), nullable=False),
+    Column("summary", Text, nullable=False),
+    Column("created_at", String(50), nullable=False),
+    Column("resolved_at", String(50)),
+)
+
+workforce_tasks_table = Table(
+    "workforce_tasks", metadata,
+    Column("task_id", String(80), primary_key=True),
+    Column("domain", String(40), nullable=False),
+    Column("status", String(40), nullable=False),
+    Column("payload", Text, nullable=False),
+    Column("updated_at", String(50), nullable=False),
+)
+
 
 def case_id_for_tx(tx_id: str) -> str:
     """Generate a clean canonical case ID: e.g. TX9281 -> ZT-09281"""
@@ -147,6 +196,38 @@ def init_db():
     metadata.create_all(engine)
     _migrate_schema()
     _seed_transactions()
+    _seed_customers()
+    _seed_workforce_tasks()
+
+
+def _seed_customers():
+    now = datetime.now(timezone.utc).isoformat()
+    demo = [
+        ("cust-ayush", "Ayush", "ayush@zerotouch.demo", "+91 90000 10001"),
+        ("cust-vansh", "Vansh", "vansh@zerotouch.demo", "+91 90000 10002"),
+        ("cust-priya", "Priya Shah", "priya@zerotouch.demo", "+91 90000 10003"),
+        ("cust-rahul", "Rahul Patil", "rahul@zerotouch.demo", "+91 90000 10004"),
+    ]
+    with engine.begin() as conn:
+        for customer_id, name, email, phone in demo:
+            if not conn.execute(customers_table.select().where(customers_table.c.customer_id == customer_id)).first():
+                conn.execute(customers_table.insert().values(customer_id=customer_id, name=name, email=email,
+                    phone=phone, account_status="ACTIVE", verification_status="VERIFIED", created_at=now))
+
+
+def _seed_workforce_tasks():
+    from backend.workforce_data import ORIGINAL_WORKFORCE_CASES
+    now = datetime.now(timezone.utc).isoformat()
+    with engine.begin() as conn:
+        count = conn.execute(text("SELECT COUNT(*) FROM workforce_tasks")).scalar()
+        if count:
+            return
+        for task in ORIGINAL_WORKFORCE_CASES:
+            task_data = dict(task)
+            task_data.setdefault("audit_log", [{"timestamp": now, "actor": "ZeroTouch", "action": "SEEDED", "status": task_data.get("status", "PREPARED")}])
+            conn.execute(workforce_tasks_table.insert().values(
+                task_id=task_data["case_id"], domain=task_data.get("domain", "support"),
+                status=task_data.get("status", "QUEUED"), payload=json.dumps(task_data), updated_at=now))
 
 
 def _migrate_schema():
@@ -404,14 +485,126 @@ def db_get_events(tx_id: str, visibility: str | None = None) -> list[dict]:
 
 
 def db_reset_all():
-    """Truncate all tables and re-seed."""
+    """Restore transaction, refund, ticket, conversation, and workforce demo state."""
     with engine.begin() as conn:
         conn.execute(audit_events_table.delete())
         conn.execute(conversation_messages_table.delete())
         conn.execute(action_gateway_log_table.delete())
+        conn.execute(refunds_table.delete())
+        conn.execute(support_tickets_table.delete())
+        conn.execute(workforce_tasks_table.delete())
         conn.execute(cases_table.delete())
         conn.execute(transactions_table.delete())
     _seed_transactions()
+    _seed_workforce_tasks()
+
+
+def db_get_customers() -> list[dict]:
+    with engine.connect() as conn:
+        return [dict(row) for row in conn.execute(customers_table.select().order_by(customers_table.c.name)).mappings().all()]
+
+
+def db_get_customer(customer_id: str) -> dict | None:
+    with engine.connect() as conn:
+        row = conn.execute(customers_table.select().where(customers_table.c.customer_id == customer_id)).mappings().first()
+        return dict(row) if row else None
+
+
+def db_get_refund(refund_id: str) -> dict | None:
+    with engine.connect() as conn:
+        row = conn.execute(refunds_table.select().where(refunds_table.c.refund_id == refund_id)).mappings().first()
+        return dict(row) if row else None
+
+
+def db_get_refund_by_idempotency(key: str) -> dict | None:
+    with engine.connect() as conn:
+        row = conn.execute(refunds_table.select().where(refunds_table.c.idempotency_key == key)).mappings().first()
+        return dict(row) if row else None
+
+
+def db_get_refund_by_transaction(transaction_id: str) -> dict | None:
+    with engine.connect() as conn:
+        row = conn.execute(refunds_table.select().where(refunds_table.c.transaction_id == transaction_id)
+                           .order_by(refunds_table.c.created_at.desc())).mappings().first()
+        return dict(row) if row else None
+
+
+def db_get_refunds(customer_id: str | None = None) -> list[dict]:
+    with engine.connect() as conn:
+        query = refunds_table.select()
+        if customer_id:
+            query = query.where(refunds_table.c.customer_id == customer_id)
+        rows = conn.execute(query.order_by(refunds_table.c.created_at.desc())).mappings().all()
+        return [dict(row) for row in rows]
+
+
+def db_create_refund(refund: dict) -> dict:
+    with engine.begin() as conn:
+        conn.execute(refunds_table.insert().values(**refund))
+    return refund
+
+
+def db_update_refund(refund_id: str, **values):
+    with engine.begin() as conn:
+        conn.execute(refunds_table.update().where(refunds_table.c.refund_id == refund_id).values(**values))
+
+
+def db_get_tickets(customer_id: str | None = None) -> list[dict]:
+    with engine.connect() as conn:
+        query = support_tickets_table.select()
+        if customer_id:
+            query = query.where(support_tickets_table.c.customer_id == customer_id)
+        return [dict(row) for row in conn.execute(query.order_by(support_tickets_table.c.created_at.desc())).mappings().all()]
+
+
+def db_create_ticket(ticket: dict) -> dict:
+    with engine.begin() as conn:
+        conn.execute(support_tickets_table.insert().values(**ticket))
+    return ticket
+
+
+def db_get_ticket(ticket_id: str) -> dict | None:
+    with engine.connect() as conn:
+        row = conn.execute(support_tickets_table.select().where(support_tickets_table.c.ticket_id == ticket_id)).mappings().first()
+        return dict(row) if row else None
+
+
+def db_get_ticket_by_case(case_id: str) -> dict | None:
+    with engine.connect() as conn:
+        row = conn.execute(support_tickets_table.select().where(support_tickets_table.c.case_id == case_id)
+                           .order_by(support_tickets_table.c.created_at.desc())).mappings().first()
+        return dict(row) if row else None
+
+
+def db_update_ticket(ticket_id: str, **values):
+    with engine.begin() as conn:
+        conn.execute(support_tickets_table.update().where(support_tickets_table.c.ticket_id == ticket_id).values(**values))
+
+
+def db_get_workforce_tasks() -> list[dict]:
+    with engine.connect() as conn:
+        rows = conn.execute(workforce_tasks_table.select().order_by(workforce_tasks_table.c.updated_at)).mappings().all()
+        return [json.loads(row["payload"]) for row in rows]
+
+
+def db_upsert_workforce_task(task: dict) -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    task["updated_at"] = now
+    with engine.begin() as conn:
+        exists = conn.execute(workforce_tasks_table.select().where(workforce_tasks_table.c.task_id == task["case_id"])).first()
+        values = {"domain": task.get("domain", "support"), "status": task.get("status", "QUEUED"),
+                  "payload": json.dumps(task), "updated_at": now}
+        if exists:
+            conn.execute(workforce_tasks_table.update().where(workforce_tasks_table.c.task_id == task["case_id"]).values(**values))
+        else:
+            conn.execute(workforce_tasks_table.insert().values(task_id=task["case_id"], **values))
+    return task
+
+
+def db_reset_workforce_tasks():
+    with engine.begin() as conn:
+        conn.execute(workforce_tasks_table.delete())
+    _seed_workforce_tasks()
 
 
 # ── NPCI Webhooks ─────────────────────────────────────────────────────────────
@@ -455,11 +648,10 @@ def db_add_message(customer_id: str, role: str, content: str, transaction_id: st
 
 
 def db_get_messages(customer_id: str):
-    target_ids = ["cust-ayush", "cust-vansh"] if customer_id in ("cust-ayush", "cust-vansh") else [customer_id]
     with engine.connect() as conn:
         rows = conn.execute(
             conversation_messages_table.select()
-            .where(conversation_messages_table.c.customer_id.in_(target_ids))
+            .where(conversation_messages_table.c.customer_id == customer_id)
             .order_by(conversation_messages_table.c.id)
         ).mappings().all()
         return [dict(row) for row in rows]

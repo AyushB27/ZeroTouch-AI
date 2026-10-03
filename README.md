@@ -72,10 +72,11 @@ Open `http://localhost:3000`. Vite proxies `/api` requests to the backend on por
 
 | Workspace | Email | Password |
 | --- | --- | --- |
-| Customer | `vansh@zerotouch.demo` | `demo123` |
-| Support team | `support@zerotouch.demo` | `demo123` |
+| Customer | `ayush@zerotouch.demo` or `vansh@zerotouch.demo` | `demo123` |
+| Employee | `employee@zerotouch.demo` or `hr@zerotouch.demo` | `demo123` |
+| Admin | `admin@zerotouch.demo` or `support@zerotouch.demo` | `demo123` |
 
-These fixed credentials and in-memory sessions are only for the local demo, not production authentication.
+Sessions and roles are held server-side. Customer transaction, case, message, ticket, and refund reads are scoped to the signed-in customer. Employee accounts can use the workforce inbox and command bar; manager dashboard, skill publishing, reset, and kill-switch actions require an admin account.
 
 ## Demo scenarios
 
@@ -87,14 +88,20 @@ These fixed credentials and in-memory sessions are only for the local demo, not 
 - **S302 — settlement explanation:** a simulated ₹50,000 settlement is itemized as ₹1,000 fees and ₹49,000 net.
 - **S306 — compliance hold:** high-risk KYC hold is escalated; funds are not autonomously released.
 
-Suggested three-minute walkthrough: sign in as Vansh and ask about the ₹2,500 debit; review the evidence and verified action; try the ₹9,650 settlement question; sign out and enter the support workspace; inspect the TX9281 audit trace; then run or inspect TX9342 to show policy-controlled human escalation.
+Suggested three-minute walkthrough: sign in as Ayush and ask about the ₹2,500 debit; review the evidence and verified action and open My Refunds; try the ₹9,650 settlement question; sign out and enter the employee workspace to prepare a support report; then enter the admin workspace to inspect the TX9281 audit trace and TX9342 human-review queue.
 
 ## API overview
 
 - `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth/logout`
-- Customer: `GET /api/customer/profile`, `/transactions`, `/cases`, `/messages`; `POST /api/chat`
+- Customer: `GET /api/customer/profile`, `/transactions`, `/cases`, `/messages`, `/refunds`; `POST /api/chat`, `/api/refunds/create`, `/api/tickets`
+- Refunds and support: `GET /api/refunds/{refund_id}`, `GET /api/tickets`
+- Workforce: `/api/workforce/tasks`, `/api/workforce/command`; admin-only `/api/workforce/dashboard`, `/api/workforce/reset`, `/api/workforce/governor/kill-switch`, `/api/workforce/skills/publish`
 - Support: `GET /api/transactions`, `GET /api/resolutions/{id}/events`, `POST /api/resolutions/{id}/run`, `POST /api/resolutions/{id}/human-decision`, `GET /api/admin/dashboard`, `/review-queue`, `/audit-logs`
 - Integration demo: `POST /api/webhook/npci`
+
+Customer-initiated reversals go through the deterministic policy and Action Gateway, then create a persisted refund record only after verification. Repeated refund requests return the existing record. Support tickets and workforce command results are stored in the database. The command bar currently executes deterministic database-backed support reports and follow-up task creation; unsupported requests return `NEEDS_INPUT` instead of claiming they were completed.
+
+Backend acceptance checks can be run with `python -m unittest backend.tests.test_product_flows -v` from the repository root.
 
 ## Prototype limits
 

@@ -25,7 +25,7 @@ export default function LoginScreen({ onLogin }) {
 
   function select(next) {
     setAccount(next);
-    setEmail(next === 'customer' ? 'ayush@zerotouch.demo' : 'support@zerotouch.demo');
+    setEmail(next === 'customer' ? 'ayush@zerotouch.demo' : next === 'employee' ? 'employee@zerotouch.demo' : 'admin@zerotouch.demo');
     setError('');
   }
 
@@ -33,7 +33,7 @@ export default function LoginScreen({ onLogin }) {
     setBusy(true);
     setError('');
     setEmail(targetEmail);
-    setAccount(targetRole === 'ADMIN' ? 'support' : 'customer');
+    setAccount(targetRole.toLowerCase());
     try {
       const user = await login(targetEmail, 'demo123');
       onLogin(user);
@@ -91,7 +91,7 @@ export default function LoginScreen({ onLogin }) {
           {/* Quick 1-Click Login Chips */}
           <div className="mt-6 space-y-2">
             <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">1-Click Quick Demo Sign In</div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
               <button
                 type="button"
                 disabled={busy}
@@ -110,6 +110,15 @@ export default function LoginScreen({ onLogin }) {
                 <Users size={14} className="text-purple-600" />
                 Support Ops Portal
               </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => quickLogin('employee@zerotouch.demo', 'EMPLOYEE')}
+                className="flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-bold text-emerald-900 transition hover:bg-emerald-100 disabled:opacity-50"
+              >
+                <Users size={14} className="text-emerald-700" />
+                Employee Workspace
+              </button>
             </div>
           </div>
 
@@ -118,8 +127,8 @@ export default function LoginScreen({ onLogin }) {
             <div className="relative flex justify-center text-xs uppercase"><span className="bg-white px-2 text-slate-400 font-semibold">Or Sign In with Form</span></div>
           </div>
 
-          <div className="grid grid-cols-2 rounded-xl bg-slate-100 p-1">
-            {[['customer', 'Customer Portal'], ['support', 'Support Ops Team']].map(([key, label]) => (
+          <div className="grid grid-cols-3 rounded-xl bg-slate-100 p-1">
+            {[['customer', 'Customer'], ['employee', 'Employee'], ['admin', 'Admin']].map(([key, label]) => (
               <button
                 key={key}
                 type="button"
@@ -177,7 +186,10 @@ export default function LoginScreen({ onLogin }) {
             <div className="text-[11px]">
               Support: <code className="font-mono font-semibold text-purple-700">support@zerotouch.demo</code>
             </div>
-            <div className="text-[10px] text-slate-400 mt-1">Default Password: <code className="font-mono">demo123</code> (any password accepted for demo)</div>
+            <div className="text-[11px]">
+              Employee: <code className="font-mono font-semibold text-emerald-700">employee@zerotouch.demo</code> · Admin: <code className="font-mono font-semibold text-purple-700">admin@zerotouch.demo</code>
+            </div>
+            <div className="text-[10px] text-slate-400 mt-1">Demo password: <code className="font-mono">demo123</code></div>
           </div>
         </div>
       </section>

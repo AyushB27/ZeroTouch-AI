@@ -61,6 +61,7 @@ export const getCurrentUser = () => request('/auth/me');
 export const getCustomerProfile = () => request('/customer/profile');
 export const getCustomerTransactions = () => request('/customer/transactions');
 export const getCustomerCases = () => request('/customer/cases');
+export const getCustomerRefunds = () => request('/customer/refunds');
 export const getCustomerMessages = () => request('/customer/messages');
 export const sendChat = message => request('/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }) });
 export const getAdminAuditLogs = () => request('/admin/audit-logs');

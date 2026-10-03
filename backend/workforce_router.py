@@ -11,7 +11,7 @@ Exposes domain-agnostic enterprise endpoints for:
 - New Joiner Academy sandbox
 """
 
-from fastapi import APIRouter, HTTPException, Query, Body
+from fastapi import APIRouter, HTTPException, Query, Body, Depends
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
@@ -25,7 +25,11 @@ from backend.planner import CommandBarPlanner
 from backend.academy import AcademyCoach
 from backend.capacity_model import compute_capacity_model
 from backend.orchestrator import run_resolution
-from backend.database import db_get_transaction, db_get_all_transactions
+from backend.database import (
+    db_get_transaction, db_get_all_transactions, db_get_workforce_tasks,
+    db_upsert_workforce_task, db_reset_workforce_tasks,
+)
+from backend.auth import require_admin, require_employee
 
 workforce_router = APIRouter()
 
@@ -89,7 +93,8 @@ def get_tasks(
 ):
     """Returns pre-worked task inbox queue with visible autonomy badges and evidence bundles."""
     # Synchronize with persistent SQLite database state for payment cases
-    for t in CURRENT_WORKFORCE_CASES:
+    tasks = db_get_workforce_tasks()
+    for t in tasks:
         tx_id = t.get("evidence", {}).get("transaction_id") if isinstance(t.get("evidence"), dict) else None
         if tx_id:
             try:
@@ -102,10 +107,12 @@ def get_tasks(
                             t["draft_action"]["action_ref"] = tx["action_id"]
                     if tx.get("dynamic_message") and "draft_action" in t:
                         t["draft_action"]["customer_message"] = tx["dynamic_message"]
+                    db_upsert_workforce_task(t)
             except Exception:
                 pass
 
-    tasks = CURRENT_WORKFORCE_CASES
+    CURRENT_WORKFORCE_CASES.clear()
+    CURRENT_WORKFORCE_CASES.extend(tasks)
     if domain and domain.lower() != "all":
         tasks = [t for t in tasks if t.get("domain", "").lower() == domain.lower()]
     if status and status.lower() != "all":
@@ -122,7 +129,7 @@ def get_tasks(
 
 
 @workforce_router.post("/tasks/{case_id}/approve")
-def approve_task(case_id: str, req: ApproveRequest = Body(...)):
+def approve_task(case_id: str, req: ApproveRequest = Body(...), user=Depends(require_employee)):
     """One-click approval of pre-worked task. Executes real multi-agent pipeline and connector adapters."""
     task = next((t for t in CURRENT_WORKFORCE_CASES if t["case_id"] == case_id), None)
     if not task:
@@ -138,10 +145,11 @@ def approve_task(case_id: str, req: ApproveRequest = Body(...)):
     )
 
     now_iso = datetime.now(timezone.utc).isoformat()
+    actor = user["name"]
     tx_id = task.get("evidence", {}).get("transaction_id") if isinstance(task.get("evidence"), dict) else None
 
     real_action_id = f"EXEC-{case_id[-6:]}-{now_iso[-6:]}"
-    real_verification = "VERIFIED"
+    real_verification = "NOT_RUN"
     agent_trace = []
 
     # 1. Real execution for Payment exceptions (LangGraph multi-agent pipeline)
@@ -149,7 +157,15 @@ def approve_task(case_id: str, req: ApproveRequest = Body(...)):
         try:
             res = run_resolution(tx_id)
             real_action_id = res.action_id or real_action_id
-            real_verification = res.verification_status or "VERIFIED"
+            real_verification = res.verification_status or "NOT_VERIFIED"
+            if real_verification != "VERIFIED":
+                task["status"] = "ESCALATED" if res.resolution_status == "ESCALATED" else "FAILED"
+                task["verification_status"] = real_verification
+                task["outcome"] = "Approval stopped because the requested action did not pass independent verification."
+                task.setdefault("audit_log", []).append({"timestamp": now_iso, "actor": actor,
+                    "action": "APPROVE_BLOCKED", "status": task["status"], "verification": real_verification})
+                db_upsert_workforce_task(task)
+                raise HTTPException(status_code=409, detail="Action was not independently verified; the case remains for support review")
             if res.dynamic_message and "draft_action" in task:
                 task["draft_action"]["customer_message"] = res.dynamic_message
             if res.action_id and "draft_action" in task:
@@ -187,16 +203,35 @@ def approve_task(case_id: str, req: ApproveRequest = Body(...)):
                     "icon": "✍️",
                 },
             ]
-        except Exception:
-            # Fallback if already executed
-            real_action_id = task.get("draft_action", {}).get("action_ref", real_action_id)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            task["status"] = "FAILED"
+            task["verification_status"] = "FAILED"
+            task["outcome"] = "Approval failed before independent verification completed."
+            task.setdefault("audit_log", []).append({"timestamp": now_iso, "actor": actor,
+                "action": "APPROVE_FAILED", "status": "FAILED"})
+            db_upsert_workforce_task(task)
+            raise HTTPException(status_code=503, detail="Action execution failed; no verified approval was recorded") from exc
 
     # 2. Real execution for IT tool provisioning
     elif task.get("domain") == "it" or "IT" in case_id:
         emp_id = task.get("evidence", {}).get("employee_id", "EMP-8840") if isinstance(task.get("evidence"), dict) else "EMP-8840"
-        tool_req = task.get("evidence", {}).get("tool_requested", "VS Code Cloud") if isinstance(task.get("evidence"), dict) else "VS Code Cloud"
-        grant_res = ConnectorRegistry.grant_tool_license(emp_id, tool_req)
-        real_action_id = grant_res.get("license_id", f"LIC-IT-{case_id[-4:]}")
+        profile = ConnectorRegistry.lookup_employee_profile(emp_id)
+        tool_text = task.get("evidence", {}).get("tool_requested", "VS Code Cloud") if isinstance(task.get("evidence"), dict) else "VS Code Cloud"
+        requested_tools = [item.strip() for item in tool_text.split("&") if item.strip()]
+        policies = [ConnectorRegistry.check_tool_access_policy(profile.get("role", ""), tool) for tool in requested_tools]
+        if not requested_tools or any(not policy["allowed"] for policy in policies):
+            task["status"] = "ESCALATED"
+            task["outcome"] = "IT access was routed for manager review because the entitlement policy did not authorize every requested tool."
+            task.setdefault("audit_log", []).append({"timestamp": now_iso, "actor": actor,
+                "action": "ACCESS_ESCALATED", "status": "ESCALATED"})
+            db_upsert_workforce_task(task)
+            raise HTTPException(status_code=409, detail="Requested access requires manager review")
+        grants = [ConnectorRegistry.grant_tool_license(emp_id, tool, approver=actor,
+                  reason="Approved standard role entitlement") for tool in requested_tools]
+        real_action_id = ",".join(grant["grant_id"] for grant in grants)
+        real_verification = "VERIFIED" if all(grant.get("status") == "PROVISIONED_ACTIVE" for grant in grants) else "FAILED"
         agent_trace = [
             {
                 "agent": "IT Entitlement Agent",
@@ -220,8 +255,11 @@ def approve_task(case_id: str, req: ApproveRequest = Body(...)):
 
     # 3. Real execution for Finance reconciliation
     elif task.get("domain") == "finance":
-        rec_res = ConnectorRegistry.reconcile_discrepancy(statement_id="STMT-2026-004", resolution="EXPENSE_OFFSET")
-        real_action_id = rec_res.get("adjustment_ref", "ADJ-2026-004")
+        statement_id = task.get("evidence", {}).get("statement_id", "")
+        rec_res = ConnectorRegistry.reconcile_discrepancy(statement_id=statement_id,
+                    resolution="EXPENSE_OFFSET", approver=actor)
+        real_action_id = rec_res["adjustment_ref"]
+        real_verification = "VERIFIED" if rec_res.get("verified") and rec_res.get("status") == "POSTED" else "FAILED"
         agent_trace = [
             {
                 "agent": "Bank Statement Parser",
@@ -245,8 +283,10 @@ def approve_task(case_id: str, req: ApproveRequest = Body(...)):
 
     # 4. Real execution for HR panel scheduling
     elif task.get("domain") == "hr":
-        panel_res = ConnectorRegistry.schedule_interview_panel(candidate_id="cand-8812")
-        real_action_id = panel_res.get("calendar_invite_id", "SCHED-INT-8812")
+        candidate_id = task.get("customer_id", "")
+        panel_res = ConnectorRegistry.schedule_interview_panel(candidate_id=candidate_id, approver=actor)
+        real_action_id = panel_res["calendar_invite_id"]
+        real_verification = "VERIFIED" if panel_res.get("status") == "SCHEDULED" and panel_res.get("protected_attributes_stripped") else "FAILED"
         agent_trace = [
             {
                 "agent": "Fairness & Anonymization Filter",
@@ -268,21 +308,32 @@ def approve_task(case_id: str, req: ApproveRequest = Body(...)):
             },
         ]
 
+    if real_verification != "VERIFIED":
+        task["status"] = "FAILED"
+        task["verification_status"] = real_verification
+        task["outcome"] = "Execution did not pass its verification checks; no approval was recorded."
+        task.setdefault("audit_log", []).append({"timestamp": now_iso, "actor": actor,
+            "action": "APPROVE_FAILED", "status": "FAILED", "verification": real_verification})
+        db_upsert_workforce_task(task)
+        raise HTTPException(status_code=409, detail="Action failed verification")
+
     task["status"] = "APPROVED"
-    task["approver"] = req.approver
-    task["outcome"] = f"Approved by {req.approver}. Action {real_action_id} executed via ActionGateway and verified independently."
+    task["approver"] = actor
+    task["outcome"] = f"Approved by {actor}. Action {real_action_id} executed via ActionGateway and verified independently."
     task["updated_at"] = now_iso
     task["execution_ref"] = real_action_id
     task["verification_status"] = real_verification
     if agent_trace:
         task["agent_trace"] = agent_trace
+    task.setdefault("audit_log", []).append({"timestamp": now_iso, "actor": actor, "action": "APPROVE", "status": task["status"], "reference": real_action_id})
+    db_upsert_workforce_task(task)
 
     # Award trust
     AutonomyGovernor.record_trust_event(
         skill_id=skill_id,
         event_type="APPROVE",
         delta=1.0,
-        approver=req.approver,
+        approver=actor,
         notes=f"Approved in one click: {task['title']} ({real_action_id})",
     )
 
@@ -296,29 +347,32 @@ def approve_task(case_id: str, req: ApproveRequest = Body(...)):
 
 
 @workforce_router.post("/tasks/{case_id}/edit")
-def edit_task(case_id: str, req: EditRequest = Body(...)):
+def edit_task(case_id: str, req: EditRequest = Body(...), user=Depends(require_employee)):
     """Human edits drafted message or parameters before approving."""
     task = next((t for t in CURRENT_WORKFORCE_CASES if t["case_id"] == case_id), None)
     if not task:
         raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
 
     now_iso = datetime.now(timezone.utc).isoformat()
+    actor = user["name"]
     task["status"] = "EDITED"
-    task["approver"] = req.approver
+    task["approver"] = actor
     task["edit_notes"] = req.edit_notes
     if req.edited_message and "draft_action" in task and "customer_message" in task["draft_action"]:
         task["draft_action"]["customer_message"] = req.edited_message
     if req.edited_amount and "amount" in task:
         task["amount"] = req.edited_amount
-    task["outcome"] = f"Edited and approved by {req.approver}: {req.edit_notes}"
+    task["outcome"] = f"Edited by {actor}: {req.edit_notes}"
     task["updated_at"] = now_iso
+    task.setdefault("audit_log", []).append({"timestamp": now_iso, "actor": actor, "action": "EDIT", "status": task["status"], "notes": req.edit_notes})
+    db_upsert_workforce_task(task)
 
     # Record edit trust event (-2 points)
     AutonomyGovernor.record_trust_event(
         skill_id=task.get("skill_id", "generic_skill"),
         event_type="EDIT",
         delta=-2.0,
-        approver=req.approver,
+        approver=actor,
         notes=f"Operator made manual adjustments before sign-off: {req.edit_notes}",
     )
 
@@ -326,24 +380,27 @@ def edit_task(case_id: str, req: EditRequest = Body(...)):
 
 
 @workforce_router.post("/tasks/{case_id}/reject")
-def reject_task(case_id: str, req: RejectRequest = Body(...)):
+def reject_task(case_id: str, req: RejectRequest = Body(...), user=Depends(require_employee)):
     """Human rejects drafted resolution and routes to specialist queue."""
     task = next((t for t in CURRENT_WORKFORCE_CASES if t["case_id"] == case_id), None)
     if not task:
         raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
 
     now_iso = datetime.now(timezone.utc).isoformat()
+    actor = user["name"]
     task["status"] = "REJECTED"
-    task["approver"] = req.approver
-    task["outcome"] = f"Rejected by {req.approver}: {req.rejection_reason}"
+    task["approver"] = actor
+    task["outcome"] = f"Rejected by {actor}: {req.rejection_reason}"
     task["updated_at"] = now_iso
+    task.setdefault("audit_log", []).append({"timestamp": now_iso, "actor": actor, "action": "REJECT", "status": task["status"], "reason": req.rejection_reason})
+    db_upsert_workforce_task(task)
 
     # Record rejection trust event (-5 points)
     AutonomyGovernor.record_trust_event(
         skill_id=task.get("skill_id", "generic_skill"),
         event_type="REJECT",
         delta=-5.0,
-        approver=req.approver,
+        approver=actor,
         notes=f"Draft resolution rejected: {req.rejection_reason}",
     )
 
@@ -353,9 +410,13 @@ def reject_task(case_id: str, req: RejectRequest = Body(...)):
 # ── 3. Command Bar Planner ────────────────────────────────────────────────────
 
 @workforce_router.post("/command")
-def execute_command(req: CommandRequest = Body(...)):
+def execute_command(req: CommandRequest = Body(...), user=Depends(require_employee)):
     """Executes high-level natural language command with interactive multi-agent plan."""
-    result = CommandBarPlanner.execute_command(req.command, req.role)
+    CURRENT_WORKFORCE_CASES.clear()
+    CURRENT_WORKFORCE_CASES.extend(db_get_workforce_tasks())
+    result = CommandBarPlanner.execute_command(req.command, user["name"])
+    for task in CURRENT_WORKFORCE_CASES:
+        db_upsert_workforce_task(task)
     return result
 
 
@@ -396,10 +457,10 @@ def run_backtest(spec: Dict[str, Any] = Body(...)):
 
 
 @workforce_router.post("/skills/publish")
-def publish_skill(req: PublishRequest = Body(...)):
+def publish_skill(req: PublishRequest = Body(...), _admin=Depends(require_admin)):
     """Promotes skill to L1 on the Autonomy Ladder and introduces a new pre-worked case."""
     skill_spec = SkillSpec(**req.spec)
-    publish_res = SkillLearner.publish_skill_to_l1(skill_spec, approver=req.approver)
+    publish_res = SkillLearner.publish_skill_to_l1(skill_spec, approver=_admin["name"])
 
     # Immediately add a new live pre-worked task (IT-409) to prove the skill is working!
     new_task = {
@@ -435,8 +496,9 @@ def publish_skill(req: PublishRequest = Body(...)):
     }
 
     # Add to tasks if not already present
-    if not any(t["case_id"] == "CASE-IT-409" for t in CURRENT_WORKFORCE_CASES):
+    if not any(t["case_id"] == "CASE-IT-409" for t in db_get_workforce_tasks()):
         CURRENT_WORKFORCE_CASES.insert(0, new_task)
+        db_upsert_workforce_task(new_task)
 
     return {
         **publish_res,
@@ -447,9 +509,9 @@ def publish_skill(req: PublishRequest = Body(...)):
 # ── 5. Autonomy Governor & Emergency Kill Switch ──────────────────────────────
 
 @workforce_router.post("/governor/kill-switch")
-def toggle_kill_switch(user: str = "Rajesh Mehra (Operations Director)"):
+def toggle_kill_switch(admin=Depends(require_admin)):
     """Toggles global emergency kill switch."""
-    state = AutonomyGovernor.toggle_kill_switch(user_name=user)
+    state = AutonomyGovernor.toggle_kill_switch(user_name=admin["name"])
     return {
         "kill_switch_active": state.kill_switch_active,
         "triggered_by": state.triggered_by,
@@ -479,6 +541,7 @@ def get_manager_dashboard(
     repetitive_pct: float = Query(0.40, ge=0.1, le=1.0),
     skill_coverage_pct: float = Query(0.60, ge=0.1, le=1.0),
     handling_time_saved_pct: float = Query(0.80, ge=0.1, le=1.0),
+    _admin=Depends(require_admin),
 ):
     """Calculates ROI capacity model formula live from Page 5 assumptions."""
     capacity = compute_capacity_model(
@@ -531,7 +594,8 @@ def submit_academy_case(req: AcademySubmitRequest = Body(...)):
 # ── 9. Reset ──────────────────────────────────────────────────────────────────
 
 @workforce_router.post("/reset")
-def reset_workforce():
+def reset_workforce(_admin=Depends(require_admin)):
     """Resets all workforce tasks, skills, and governor state for pristine demo."""
     reset_workforce_data()
+    db_reset_workforce_tasks()
     return {"status": "SUCCESS", "message": "Workforce platform restored to pristine demo state."}
