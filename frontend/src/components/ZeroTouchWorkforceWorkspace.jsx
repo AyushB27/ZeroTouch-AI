@@ -142,7 +142,7 @@ export default function ZeroTouchWorkforceWorkspace({ user, isAdmin = false, onL
   }
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-100 font-sans text-slate-800">
+    <div className="zt-workforce-shell flex flex-col h-screen w-screen overflow-hidden bg-slate-100 font-sans text-slate-800">
       {/* ── Global Header & Navigation ── */}
       <WorkforceNavbar
         currentRole={currentRole}

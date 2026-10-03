@@ -1,0 +1,25 @@
+Inspect the ZeroTouch-AI repository thoroughly before making any changes.
+
+Check:
+1. Existing React/Vite frontend
+2. Existing FastAPI backend and APIs
+3. Authentication for Customer, Employee and Admin
+4. Current AI/agent architecture
+5. Current employee workspace and department bots
+6. Current customer support and refund workflows
+7. Existing database and seeded demo data
+8. Existing Grok/xAI integration
+9. Existing Watermelon MCP availability
+
+Do not modify any files yet.
+
+After inspection, give me:
+- Current architecture
+- Current UI structure
+- What is already implemented
+- Important files
+- Any obvious frontend issues
+- Whether Watermelon MCP is available in this Codex session
+- Your recommended UI redesign approach
+
+Do not start implementation until I give you the next instruction.
