@@ -4,75 +4,69 @@
 
 :root {
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #15243a;
+  color: #0f172a;
   background: #f5f8fc;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  font-optical-sizing: auto;
+  --zt-navy: #07356b;
+  --zt-blue: #1266bb;
+  --zt-cyan: #77e3f1;
+  --zt-border: #e2e8f0;
+  --zt-muted: #64748b;
 }
 
 * { box-sizing: border-box; }
-html, body, #root { min-width: 320px; min-height: 100%; margin: 0; }
-body { background: #f5f8fc; }
-button, input, textarea, select { font: inherit; }
+body { margin: 0; min-width: 320px; min-height: 100vh; background: #f5f8fc; }
+button, input, textarea { font: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
-button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
-  outline: 3px solid rgb(14 116 191 / 24%);
-  outline-offset: 2px;
-}
-::selection { color: #07356b; background: #c9edff; }
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #cbd5e1; border: 2px solid transparent; border-radius: 999px; background-clip: padding-box; }
-::-webkit-scrollbar-thumb:hover { background-color: #94a3b8; }
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid rgb(14 116 191 / 24%); outline-offset: 2px; }
+::selection { color: #06254a; background: #a5f3fc; }
 
-.zt-login {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  min-height: 100vh;
-  background: #f5f8fc;
-}
-.zt-login-brand {
-  background: radial-gradient(ellipse at 85% 18%, rgb(0 186 242 / 21%), transparent 38%), linear-gradient(145deg, #061f42 0%, #07356b 56%, #0b477c 100%);
-}
-.zt-orbit { position: absolute; right: -18rem; top: 12%; width: 42rem; height: 42rem; border: 1px solid rgb(255 255 255 / 9%); border-radius: 50%; pointer-events: none; }
-.zt-orbit-two { right: -12rem; top: 22%; width: 30rem; height: 30rem; border-color: rgb(255 255 255 / 7%); }
-.zt-input:focus { border-color: #1676b8; box-shadow: 0 0 0 4px rgb(22 118 184 / 11%); }
-.zt-role-option:focus-visible { outline-offset: 3px; }
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: #f1f5f9; }
+::-webkit-scrollbar-thumb { border-radius: 99px; background: #cbd5e1; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 
-/* The enterprise workspace keeps its dense tools, with a quieter shared frame. */
+.zt-login { display: grid; grid-template-columns: minmax(0, 1.02fr) minmax(420px, .98fr); }
+.zt-login-brand { background: radial-gradient(ellipse at 15% 85%, rgba(22, 117, 174, .35), transparent 48%), linear-gradient(145deg, #061d3b 0%, #082b53 55%, #0a3966 100%); }
+.zt-orbit { position: absolute; right: -145px; top: 14%; width: min(62vw, 660px); aspect-ratio: 1; border: 1px solid rgba(171, 224, 247, .12); border-radius: 50%; pointer-events: none; }
+.zt-orbit::before, .zt-orbit::after { content: ""; position: absolute; inset: 10%; border: 1px solid rgba(171, 224, 247, .09); border-radius: inherit; }
+.zt-orbit::after { inset: 22%; }
+.zt-orbit-two { right: -34px; top: 27%; width: min(44vw, 470px); opacity: .7; }
+.zt-input:focus { border-color: #2675c3; box-shadow: 0 0 0 4px rgba(37, 99, 170, .12); }
+.zt-role-option { min-height: 70px; }
+
+/* Keep the admin/workforce shell aligned with the same calm fintech surfaces. */
 .zt-workforce-navbar { background: #fff !important; color: #15243a !important; border-color: #e2e8f0 !important; box-shadow: 0 1px 3px rgb(15 23 42 / 4%) !important; }
 .zt-workforce-navbar .text-white { color: #15243a !important; }
-.zt-workforce-navbar .text-blue-200, .zt-workforce-navbar .text-blue-100 { color: #64748b !important; }
-.zt-workforce-navbar .text-blue-200\/80 { color: #64748b !important; }
+.zt-workforce-navbar .text-blue-200, .zt-workforce-navbar .text-blue-100, .zt-workforce-navbar .text-blue-200\/80 { color: #64748b !important; }
 .zt-workforce-navbar .bg-white\/10, .zt-workforce-navbar .bg-white\/5 { background: #f8fafc !important; }
 .zt-workforce-navbar .border-white\/10, .zt-workforce-navbar .border-white\/15, .zt-workforce-navbar .border-white\/20 { border-color: #e2e8f0 !important; }
-.zt-workforce-navbar .zt-workforce-navrow { background: #f8fafc !important; border-color: #e2e8f0 !important; }
+.zt-workforce-navrow { background: #f8fafc !important; border-color: #e2e8f0 !important; }
 .zt-workforce-navrow .text-blue-200 { color: #64748b !important; }
 .zt-workforce-navrow .bg-white { background: #e8f2ff !important; }
 .zt-workforce-navbar button.bg-rose-600, .zt-workforce-navbar button.bg-rose-600 .text-white { color: #fff !important; }
 .zt-workforce-navbar select { color: #334155 !important; background-color: #f8fafc !important; }
 .zt-workforce-shell { background: #f3f6fb !important; }
 
-@keyframes slideIn {
-  from { opacity: 0; transform: translateX(-8px); }
-  to { opacity: 1; transform: translateX(0); }
-}
+@keyframes slideIn { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: translateX(0); } }
 .timeline-item { animation: slideIn .2s ease-out; }
 @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
 .pulse-dot { animation: pulse-dot 1.2s ease-in-out infinite; }
 
-@media (min-width: 1024px) {
-  .zt-login { grid-template-columns: minmax(0, 1.02fr) minmax(480px, .98fr); }
-}
-@media (max-width: 640px) {
-  .zt-login-brand { min-height: 330px; }
-  .zt-orbit { right: -30rem; }
-  .zt-orbit-two { right: -23rem; }
+@media (max-width: 1023px) {
+  .zt-login { grid-template-columns: 1fr; }
+  .zt-login-brand { min-height: 440px; }
+  .zt-orbit { right: -190px; top: 8%; width: 520px; }
   .zt-workforce-navbar > div:first-child { height: auto; min-height: 3.5rem; align-items: flex-start; gap: .5rem; padding-block: .6rem; }
   .zt-workforce-navbar > div:first-child > div:last-child { flex-wrap: wrap; justify-content: flex-end; }
+}
+@media (max-width: 520px) {
+  .zt-login-brand { min-height: 390px; }
+  .zt-login-brand h1 { font-size: 2.35rem; }
+  .zt-login-brand .zt-orbit { opacity: .65; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }

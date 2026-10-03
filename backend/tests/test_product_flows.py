@@ -110,6 +110,8 @@ class ProductFlowTests(unittest.TestCase):
         self.assertEqual(resolved.status_code, 200, resolved.text)
         self.assertEqual(resolved.json()["status"], "RESOLVED")
         self.assertTrue(resolved.json()["reply"])
+        self.assertTrue(resolved.json()["reply"].startswith("Hi Ayush,"))
+        self.assertNotIn("Hi Aarav Sharma", resolved.json()["reply"])
         self.assertEqual(len(db_get_refunds("cust-ayush")), 1)
 
         escalated = self.client.post("/api/chat", headers=headers, json={

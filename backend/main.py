@@ -457,6 +457,15 @@ def customer_chat(payload: CustomerChatMessage, user=Depends(require_customer)):
         else:
             reply = f"Case {cid} is already {status.lower().replace('_', ' ')}. {('Action reference: ' + action_id + '.') if action_id else 'No further action is required.'}"
 
+    # Legacy demo transaction names are not always the same as the authenticated
+    # account owner. Never greet a customer with another seeded customer's name.
+    customer_record = db_get_customer(user["id"])
+    customer_name = customer_record.get("name") if customer_record else user.get("name", "there")
+    reply = re.sub(r"^Hi\s+[^,]+,", lambda _match: f"Hi {customer_name},", reply, count=1)
+    if reply.startswith(f"Hi {customer_name},"):
+        db_update_transaction(tx_id, dynamic_message=reply)
+        db_update_case_by_tx(tx_id, dynamic_message=reply)
+
     db_add_message(user["id"], "assistant", reply, tx_id)
     if status == "ESCALATED" and not db_get_ticket_by_case(cid):
         now = datetime.now(timezone.utc).isoformat()
