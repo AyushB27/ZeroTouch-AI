@@ -5,7 +5,7 @@ import {
   FileText, Layers, ExternalLink, ShieldAlert, Sparkles, Filter,
   Bot, Loader2
 } from 'lucide-react';
-import { approveWorkforceTask, editWorkforceTask, rejectWorkforceTask } from '../api';
+import { approveWorkforceTask, editWorkforceTask, rejectWorkforceTask, runWorkforceAgent } from '../api';
 
 const money = val => (val ? `₹${Number(val).toLocaleString('en-IN')}` : '₹0');
 
@@ -132,6 +132,7 @@ export default function TaskInbox({
   const [selectedStatus, setSelectedStatus] = useState('all');
   const [selectedCaseId, setSelectedCaseId] = useState(tasks[0]?.case_id || null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [botLoading, setBotLoading] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [editMessage, setEditMessage] = useState('');
@@ -160,6 +161,23 @@ export default function TaskInbox({
       setFeedbackNotice({ type: 'error', message: err.message || 'Failed to approve task.' });
     } finally {
       setActionLoading(false);
+    }
+  }
+
+  async function handleRunBot(caseId) {
+    setBotLoading(true);
+    try {
+      const response = await runWorkforceAgent(caseId);
+      const agent = response.agent_result;
+      const label = agent.model ? `${agent.provider} (${agent.model})` : agent.provider;
+      const fallback = agent.fallback_label ? ` — ${agent.fallback_label}` : '';
+      const toolSummary = agent.tools_called.length ? `Read tools: ${agent.tools_called.join(', ')}. ` : '';
+      setFeedbackNotice({ type: agent.fallback ? 'warning' : 'success', message: `${label}${fallback}. ${toolSummary}Agent recommendation ready.` });
+      await onRefresh();
+    } catch (err) {
+      setFeedbackNotice({ type: 'error', message: err.message || 'Workflow agent failed.' });
+    } finally {
+      setBotLoading(false);
     }
   }
 
@@ -368,6 +386,36 @@ export default function TaskInbox({
               </div>
             </div>
 
+            {activeTask.bot_assignment && (
+              <section className="rounded-2xl border border-cyan-200 bg-cyan-50/60 p-4 space-y-2.5">
+                <div className="flex items-center gap-2 text-sm font-extrabold text-[#07356b]">
+                  <Bot size={16} /> {activeTask.bot_assignment.name}
+                  <span className="text-[10px] font-bold uppercase tracking-wide text-cyan-800">Workflow worker</span>
+                </div>
+                <p className="text-xs text-slate-600">Pain points: {(activeTask.bot_assignment.pain_points || []).join(' · ')}</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {(activeTask.bot_assignment.tools || []).map(tool => (
+                    <span key={tool} className="rounded-lg border border-cyan-200 bg-white px-2 py-1 text-[10px] font-semibold text-slate-700">{tool.replace(/_/g, ' ')}</span>
+                  ))}
+                </div>
+                {activeTask.external_agent_result && (
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-1.5">
+                    <div className="flex items-center gap-2 text-[11px] font-bold text-slate-700">
+                      {activeTask.external_agent_result.fallback ? <AlertTriangle size={13} className="text-amber-600" /> : <CheckCircle2 size={13} className="text-emerald-600" />}
+                      {activeTask.external_agent_result.provider} {activeTask.external_agent_result.model && `· ${activeTask.external_agent_result.model}`}
+                    </div>
+                    <p className="text-xs text-slate-700">{activeTask.external_agent_result.draft}</p>
+                    {activeTask.external_agent_result.fallback_label && <p className="text-[10px] text-amber-700">{activeTask.external_agent_result.fallback_label}</p>}
+                  </div>
+                )}
+                {activeTask.bot_observation && (
+                  <details className="text-xs text-slate-600">
+                    <summary className="cursor-pointer font-bold">Read-only evidence gathered by this bot</summary>
+                    <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-white p-2 text-[10px]">{JSON.stringify(activeTask.bot_observation, null, 2)}</pre>
+                  </details>
+                )}
+              </section>
+            )}
             {/* Integration Point #1 */}
             {showIntegrationPoints && (
               <div className="rounded-xl bg-amber-50/80 border border-amber-300 p-2.5 text-xs text-amber-900 font-semibold flex items-center gap-2">
@@ -527,6 +575,14 @@ export default function TaskInbox({
                   </div>
                 )}
               </div>
+            </div>
+
+            <p className="text-right text-[10px] text-slate-500">Redacted task context goes to xAI Grok; only read-only tools are available.</p>
+            <div className="flex justify-end">
+              <button type="button" disabled={botLoading || actionLoading} onClick={() => handleRunBot(activeTask.case_id)} className="inline-flex items-center gap-2 rounded-xl border border-cyan-300 bg-cyan-50 px-3 py-2 text-xs font-bold text-[#07356b] disabled:opacity-50">
+                {botLoading ? <Loader2 size={14} className="animate-spin" /> : <Bot size={14} />}
+                {botLoading ? 'Grok is working…' : 'Run workflow bot'}
+              </button>
             </div>
 
             {/* Section 4: Action Toolbar */}

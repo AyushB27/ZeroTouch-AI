@@ -68,6 +68,10 @@ npm run dev
 
 Open `http://localhost:3000`. Vite proxies `/api` requests to the backend on port 8000.
 
+## Grok workflow agents
+
+Set `XAI_API_KEY` in the backend environment to enable hosted Grok function calling. Optionally set `XAI_MODEL` (defaults to `grok-4.7`). In the workforce task inbox, choose **Run workflow bot** to call Grok with the selected bot and its read-only tools. Write actions still require the existing human approval path. If the key is missing or xAI is unavailable, ZeroTouch labels the deterministic fallback in the trace.
+
 ## Demo accounts
 
 | Workspace | Email | Password |

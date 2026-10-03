@@ -18,18 +18,16 @@ from datetime import datetime, timezone
 
 from backend.workforce_models import AutonomyLevel, SkillSpec, CaseStatus
 from backend.workforce_data import SEEDED_ROLES, CURRENT_WORKFORCE_CASES, reset_workforce_data
-from backend.connectors import ConnectorRegistry
 from backend.governor import AutonomyGovernor
 from backend.skill_learner import SkillLearner
-from backend.planner import CommandBarPlanner
-from backend.academy import AcademyCoach
 from backend.capacity_model import compute_capacity_model
-from backend.orchestrator import run_resolution
 from backend.database import (
     db_get_transaction, db_get_all_transactions, db_get_workforce_tasks,
     db_upsert_workforce_task, db_reset_workforce_tasks,
 )
 from backend.auth import require_admin, require_employee
+from backend.workflow_bots import assigned_bot, bot_catalog, bot_for_task, run_bot_tool
+from backend.grok_agent import run_grok_agent
 
 workforce_router = APIRouter()
 
@@ -78,6 +76,12 @@ class AcademySubmitRequest(BaseModel):
 
 # ── 1. Roles ──────────────────────────────────────────────────────────────────
 
+@workforce_router.get("/bots")
+def get_workflow_bots():
+    """List workflow bots, their pain points, and least-privilege tool grants."""
+    return {"bots": bot_catalog()}
+
+
 @workforce_router.get("/roles")
 def get_roles():
     """Returns all 6 seeded employee roles for the role switcher."""
@@ -111,6 +115,16 @@ def get_tasks(
             except Exception:
                 pass
 
+    for task in tasks:
+        task["bot_assignment"] = assigned_bot(task)
+        evidence = task.get("evidence", {})
+        try:
+            if task["bot_assignment"]["id"] == "support_bot" and "payment_reconciliation" in task["bot_assignment"]["tools"] and evidence.get("transaction_id"):
+                task["bot_observation"] = run_bot_tool("support_bot", "payment_reconciliation", transaction_id=evidence["transaction_id"])
+            elif task["bot_assignment"]["id"] == "hiring_bot":
+                task["bot_observation"] = run_bot_tool("hiring_bot", "candidate_evaluation", candidate_id=task.get("customer_id", ""), job_title=evidence.get("target_role", "Staff Backend Engineer (Payments)"))
+        except Exception:
+            task["bot_observation"] = {"status": "LOOKUP_UNAVAILABLE", "message": "A read-only lookup needs human review."}
     CURRENT_WORKFORCE_CASES.clear()
     CURRENT_WORKFORCE_CASES.extend(tasks)
     if domain and domain.lower() != "all":
@@ -128,6 +142,26 @@ def get_tasks(
     }
 
 
+@workforce_router.post("/tasks/{case_id}/run-agent")
+def run_task_agent(case_id: str, user=Depends(require_employee)):
+    """Run the assigned Grok workflow agent with its read-only tools."""
+    tasks = db_get_workforce_tasks()
+    task = next((item for item in tasks if item.get("case_id") == case_id), None)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+    task["bot_assignment"] = assigned_bot(task)
+    result = run_grok_agent(task)
+    task["external_agent_result"] = result
+    task.setdefault("audit_log", []).append({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "actor": task["bot_assignment"]["name"], "action": "AGENT_RUN",
+        "provider": result["provider"], "fallback": result["fallback"],
+        "tools_called": result["tools_called"],
+    })
+    db_upsert_workforce_task(task)
+    CURRENT_WORKFORCE_CASES[:] = tasks
+    return {"case": task, "agent_result": result, "requested_by": user["name"]}
+
 @workforce_router.post("/tasks/{case_id}/approve")
 def approve_task(case_id: str, req: ApproveRequest = Body(...), user=Depends(require_employee)):
     """One-click approval of pre-worked task. Executes real multi-agent pipeline and connector adapters."""
@@ -135,6 +169,8 @@ def approve_task(case_id: str, req: ApproveRequest = Body(...), user=Depends(req
     if not task:
         raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
 
+    bot = bot_for_task(task)
+    task["assigned_bot"] = bot["id"]
     skill_id = task.get("skill_id", "generic_skill")
 
     # Evaluate autonomy governor check
@@ -155,7 +191,7 @@ def approve_task(case_id: str, req: ApproveRequest = Body(...), user=Depends(req
     # 1. Real execution for Payment exceptions (LangGraph multi-agent pipeline)
     if tx_id:
         try:
-            res = run_resolution(tx_id)
+            res = run_bot_tool(bot["id"], "payment_resolution", tx_id=tx_id)
             real_action_id = res.action_id or real_action_id
             real_verification = res.verification_status or "NOT_VERIFIED"
             if real_verification != "VERIFIED":
@@ -217,10 +253,10 @@ def approve_task(case_id: str, req: ApproveRequest = Body(...), user=Depends(req
     # 2. Real execution for IT tool provisioning
     elif task.get("domain") == "it" or "IT" in case_id:
         emp_id = task.get("evidence", {}).get("employee_id", "EMP-8840") if isinstance(task.get("evidence"), dict) else "EMP-8840"
-        profile = ConnectorRegistry.lookup_employee_profile(emp_id)
+        profile = run_bot_tool(bot["id"], "lookup_employee_profile", employee_id=emp_id)
         tool_text = task.get("evidence", {}).get("tool_requested", "VS Code Cloud") if isinstance(task.get("evidence"), dict) else "VS Code Cloud"
         requested_tools = [item.strip() for item in tool_text.split("&") if item.strip()]
-        policies = [ConnectorRegistry.check_tool_access_policy(profile.get("role", ""), tool) for tool in requested_tools]
+        policies = [run_bot_tool(bot["id"], "check_tool_access_policy", role=profile.get("role", ""), tool_name=tool) for tool in requested_tools]
         if not requested_tools or any(not policy["allowed"] for policy in policies):
             task["status"] = "ESCALATED"
             task["outcome"] = "IT access was routed for manager review because the entitlement policy did not authorize every requested tool."
@@ -228,7 +264,7 @@ def approve_task(case_id: str, req: ApproveRequest = Body(...), user=Depends(req
                 "action": "ACCESS_ESCALATED", "status": "ESCALATED"})
             db_upsert_workforce_task(task)
             raise HTTPException(status_code=409, detail="Requested access requires manager review")
-        grants = [ConnectorRegistry.grant_tool_license(emp_id, tool, approver=actor,
+        grants = [run_bot_tool(bot["id"], "grant_tool_license", employee_id=emp_id, tool_name=tool, approver=actor,
                   reason="Approved standard role entitlement") for tool in requested_tools]
         real_action_id = ",".join(grant["grant_id"] for grant in grants)
         real_verification = "VERIFIED" if all(grant.get("status") == "PROVISIONED_ACTIVE" for grant in grants) else "FAILED"
@@ -256,7 +292,7 @@ def approve_task(case_id: str, req: ApproveRequest = Body(...), user=Depends(req
     # 3. Real execution for Finance reconciliation
     elif task.get("domain") == "finance":
         statement_id = task.get("evidence", {}).get("statement_id", "")
-        rec_res = ConnectorRegistry.reconcile_discrepancy(statement_id=statement_id,
+        rec_res = run_bot_tool(bot["id"], "reconcile_discrepancy", statement_id=statement_id,
                     resolution="EXPENSE_OFFSET", approver=actor)
         real_action_id = rec_res["adjustment_ref"]
         real_verification = "VERIFIED" if rec_res.get("verified") and rec_res.get("status") == "POSTED" else "FAILED"
@@ -284,7 +320,8 @@ def approve_task(case_id: str, req: ApproveRequest = Body(...), user=Depends(req
     # 4. Real execution for HR panel scheduling
     elif task.get("domain") == "hr":
         candidate_id = task.get("customer_id", "")
-        panel_res = ConnectorRegistry.schedule_interview_panel(candidate_id=candidate_id, approver=actor)
+        run_bot_tool(bot["id"], "candidate_evaluation", candidate_id=candidate_id, job_title=task.get("evidence", {}).get("target_role", "Staff Backend Engineer (Payments)"))
+        panel_res = run_bot_tool(bot["id"], "schedule_interview_panel", candidate_id=candidate_id, approver=actor)
         real_action_id = panel_res["calendar_invite_id"]
         real_verification = "VERIFIED" if panel_res.get("status") == "SCHEDULED" and panel_res.get("protected_attributes_stripped") else "FAILED"
         agent_trace = [
@@ -414,7 +451,7 @@ def execute_command(req: CommandRequest = Body(...), user=Depends(require_employ
     """Executes high-level natural language command with interactive multi-agent plan."""
     CURRENT_WORKFORCE_CASES.clear()
     CURRENT_WORKFORCE_CASES.extend(db_get_workforce_tasks())
-    result = CommandBarPlanner.execute_command(req.command, user["name"])
+    result = run_bot_tool("support_bot", "support_command", command_text=req.command, user_role=user["name"])
     for task in CURRENT_WORKFORCE_CASES:
         db_upsert_workforce_task(task)
     return result
@@ -431,7 +468,7 @@ def get_skills():
 @workforce_router.post("/skills/teach")
 def teach_skill(req: TeachRequest = Body(...)):
     """Synthesizes universal YAML/JSON SkillSpec from recorded actions and 'why' notes."""
-    spec = SkillLearner.synthesize_skill_spec(
+    spec = run_bot_tool("it_access_bot", "teach_skill_spec",
         domain=req.domain,
         task_name=req.task_name,
         recorded_actions=req.actions,
@@ -449,7 +486,7 @@ def teach_skill(req: TeachRequest = Body(...)):
 def run_backtest(spec: Dict[str, Any] = Body(...)):
     """Executes historical backtest on 12 past cases to prove accuracy and safety."""
     skill_spec = SkillSpec(**spec)
-    report = SkillLearner.run_historical_backtest(skill_spec)
+    report = run_bot_tool("it_access_bot", "backtest_skill", skill_spec=skill_spec)
     return {
         "status": "BACKTEST_COMPLETED",
         "report": report.model_dump(),
@@ -460,7 +497,7 @@ def run_backtest(spec: Dict[str, Any] = Body(...)):
 def publish_skill(req: PublishRequest = Body(...), _admin=Depends(require_admin)):
     """Promotes skill to L1 on the Autonomy Ladder and introduces a new pre-worked case."""
     skill_spec = SkillSpec(**req.spec)
-    publish_res = SkillLearner.publish_skill_to_l1(skill_spec, approver=_admin["name"])
+    publish_res = run_bot_tool("it_access_bot", "publish_skill_l1", skill_spec=skill_spec, approver=_admin["name"])
 
     # Immediately add a new live pre-worked task (IT-409) to prove the skill is working!
     new_task = {
@@ -567,7 +604,7 @@ def get_manager_dashboard(
 @workforce_router.get("/finance/reconciliation")
 def get_finance_reconciliation():
     """Returns bank statement matching queue, fee/GST explanations, and duplicate flags."""
-    lines = ConnectorRegistry.query_bank_statement_lines()
+    lines = run_bot_tool("finance_bot", "query_bank_statement_lines")
     return {
         "statement_lines": lines,
         "auto_matched_count": sum(1 for l in lines if l["status"] == "MATCHED"),
@@ -581,13 +618,13 @@ def get_finance_reconciliation():
 @workforce_router.get("/academy/case")
 def get_academy_case():
     """Returns anonymized complex replay case for new joiner onboarding."""
-    return AcademyCoach.get_replay_case()
+    return run_bot_tool("academy_bot", "get_replay_case")
 
 
 @workforce_router.post("/academy/submit")
 def submit_academy_case(req: AcademySubmitRequest = Body(...)):
     """AI Coach grades new joiner reasoning and updates Competency Map."""
-    run = AcademyCoach.evaluate_joiner_run(req.joiner_id, req.answers)
+    run = run_bot_tool("academy_bot", "evaluate_joiner_run", joiner_id=req.joiner_id, answers=req.answers)
     return {"run": run.model_dump()}
 
 

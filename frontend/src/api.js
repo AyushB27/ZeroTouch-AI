@@ -109,6 +109,8 @@ export const getWorkforceTasks = (domain, status) => {
   const q = params.toString() ? `?${params.toString()}` : '';
   return request(`/workforce/tasks${q}`);
 };
+export const runWorkforceAgent = caseId =>
+  request(`/workforce/tasks/${encodeURIComponent(caseId)}/run-agent`, { method: 'POST', timeout: 22000 });
 export const approveWorkforceTask = (caseId, approver, notes) =>
   request(`/workforce/tasks/${encodeURIComponent(caseId)}/approve`, {
     method: 'POST',

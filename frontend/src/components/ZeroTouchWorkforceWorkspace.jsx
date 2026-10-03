@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import EmployeeAgentWorkspace from './EmployeeAgentWorkspace';
 import WorkforceNavbar from './WorkforceNavbar';
 import TaskInbox from './TaskInbox';
 import CommandBarModal from './CommandBarModal';
@@ -139,6 +140,8 @@ export default function ZeroTouchWorkforceWorkspace({ user, isAdmin = false, onL
       setIsResetting(false);
     }
   }
+
+  if (!isAdmin) return <EmployeeAgentWorkspace user={user} currentRole={currentRole} onLogout={onLogout} />;
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-100 font-sans text-slate-800">
