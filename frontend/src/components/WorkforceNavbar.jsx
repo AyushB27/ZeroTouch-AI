@@ -23,7 +23,7 @@ export default function WorkforceNavbar({
   isResetting,
 }) {
   return (
-    <header className="bg-[#07356b] text-white border-b border-white/10 shrink-0 select-none shadow-md z-30">
+    <header className="zt-workforce-navbar bg-[#07356b] text-white border-b border-white/10 shrink-0 select-none shadow-md z-30">
       {/* Top Bar */}
       <div className="h-14 px-4 flex items-center justify-between">
         {/* Brand & Track */}
@@ -132,8 +132,14 @@ export default function WorkforceNavbar({
       </div>
 
       {/* Domain Navigation Tabs */}
-      <div className="h-10 px-4 bg-[#05284f]/90 border-t border-white/5 flex items-center justify-between text-xs overflow-x-auto">
+      <div className="zt-workforce-navrow h-10 px-4 bg-[#05284f]/90 border-t border-white/5 flex items-center justify-between text-xs overflow-x-auto">
         <div className="flex items-center gap-1">
+          {isAdmin && <>
+            {[["overview","Overview"],["customers","Customers"],["employees","Employees"],["conversations","Conversations"],["tasks","Tasks"],["tickets","Tickets"],["transactions","Transactions"],["refunds","Refunds"],["access_requests","Access"],["agents","Agents"],["knowledge","Knowledge"],["leads","Leads"],["campaigns","Campaigns"],["audit","Audit Logs"],["settings","Settings"]].map(([id,label]) => <button key={id} onClick={() => onSelectTab(id)} className={`shrink-0 rounded-lg px-2.5 py-1 font-bold transition ${activeTab === id ? 'bg-white text-[#07356b]' : 'text-blue-200 hover:bg-white/10 hover:text-white'}`}>{label}</button>)}
+            <select aria-label="Additional admin tools" value={['dashboard','inbox','finance','studio','academy'].includes(activeTab) ? activeTab : ''} onChange={event => event.target.value && onSelectTab(event.target.value)} className="ml-2 shrink-0 rounded-lg border border-white/15 bg-white/10 px-2 py-1 text-[10px] font-semibold text-blue-100">
+              <option value="" className="text-slate-900">Additional tools…</option><option value="dashboard" className="text-slate-900">Operations & Capacity</option><option value="inbox" className="text-slate-900">Review Queue</option><option value="finance" className="text-slate-900">Finance Ledger</option><option value="studio" className="text-slate-900">Skill Studio</option><option value="academy" className="text-slate-900">Joiner Sandbox</option>
+            </select>
+          </>}
           {isAdmin && <button
             onClick={() => onSelectTab('inbox')}
             className={`px-3 py-1 rounded-lg font-bold transition flex items-center gap-1.5 ${
