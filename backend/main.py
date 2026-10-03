@@ -59,6 +59,18 @@ from backend.auth import SESSIONS, current_user, require_customer, require_emplo
 async def lifespan(app: FastAPI):
     init_db()       # Create tables + seed transactions + seed canonical cases
     init_rag()      # Load knowledge base + generate embeddings
+    # Seed deterministic static sessions for all demo users so tokens survive backend restarts.
+    # The frontend stores these tokens in localStorage and they stay valid forever in demo mode.
+    for email, account in DEMO_USERS.items():
+        # Use a deterministic stable token derived from the email (safe for demo only)
+        import hashlib as _hl
+        stable_token = _hl.sha256(f"zerotouch-demo-session-{email}".encode()).hexdigest()
+        SESSIONS[stable_token] = {
+            "role": account["role"],
+            "name": account["name"],
+            "id": account["id"],
+            "email": email,
+        }
     yield
 
 app = FastAPI(title="ZeroTouch Payment Resolution Engine", version="2.0.0", lifespan=lifespan)
@@ -107,20 +119,23 @@ def health():
 
 @app.post("/api/auth/login")
 def login(credentials: LoginRequest):
+    import hashlib as _hl
     raw_email = credentials.email.strip().lower()
     account = DEMO_USERS.get(raw_email)
 
     if not account or not secrets.compare_digest(credentials.password, account["password"]):
         raise HTTPException(status_code=401, detail="Email or password is incorrect")
 
-    token = secrets.token_urlsafe(32)
-    SESSIONS[token] = {
+    # Return the stable deterministic token (pre-seeded at startup).
+    # This survives backend restarts — the frontend localStorage token stays valid.
+    stable_token = _hl.sha256(f"zerotouch-demo-session-{raw_email}".encode()).hexdigest()
+    SESSIONS[stable_token] = {
         "role": account["role"],
         "name": account["name"],
         "id": account["id"],
         "email": account.get("email", raw_email),
     }
-    return {"token": token, "user": SESSIONS[token]}
+    return {"token": stable_token, "user": SESSIONS[stable_token]}
 
 
 @app.get("/api/auth/me")
@@ -626,6 +641,93 @@ def admin_review_queue(_user=Depends(require_admin)):
 @app.get("/api/admin/customers")
 def admin_customers(_user=Depends(require_admin)):
     return db_get_customers()
+
+
+class AccessDecisionRequest(BaseModel):
+    decision: str
+    notes: str = ""
+
+
+class EmployeeAssistantRequest(BaseModel):
+    message: str
+    department: str = "all"
+    conversation_id: Optional[str] = None
+
+
+@app.get("/api/admin/enterprise-overview")
+def admin_enterprise_overview(_user=Depends(require_admin)):
+    from sqlalchemy import select, func
+    from backend.database import (
+        engine, customers_table, employees_table, departments_table,
+        conversations_table, tasks_table, support_tickets_table,
+        transactions_table, refunds_table, knowledge_documents_table,
+        expenses_table, it_tickets_table, access_requests_table,
+        onboarding_plans_table, training_assignments_table, audit_logs_table,
+        sales_leads_table, campaigns_table
+    )
+    tables = {
+        "customers": customers_table, "employees": employees_table, "departments": departments_table,
+        "conversations": conversations_table, "tasks": tasks_table, "tickets": support_tickets_table,
+        "transactions": transactions_table, "refunds": refunds_table, "knowledge": knowledge_documents_table,
+        "expenses": expenses_table, "it_requests": it_tickets_table, "access_requests": access_requests_table,
+        "onboarding": onboarding_plans_table, "training": training_assignments_table, "audit": audit_logs_table,
+        "leads": sales_leads_table, "campaigns": campaigns_table,
+    }
+    with engine.connect() as conn:
+        counts = {key: conn.execute(select(func.count()).select_from(table)).scalar_one()
+                  for key, table in tables.items()}
+        rows = {}
+        for key, table in tables.items():
+            ordering = table.c.timestamp if key == "audit" else table.c.updated_at if key == "tasks" else table.c.created_at if "created_at" in table.c else None
+            query = table.select().order_by(ordering.desc()).limit(100) if ordering is not None else table.select().limit(100)
+            rows[key] = [dict(row) for row in conn.execute(query).mappings().all()]
+    for row in rows["tasks"]:
+        if row.get("payload"):
+            try: row.update(json.loads(row["payload"]))
+            except (TypeError, json.JSONDecodeError): pass
+    agent_names = ["Supervisor Agent", "Finance Agent", "HR Agent", "IT Agent", "Customer Support Agent",
+                   "Analytics Agent", "Sales Agent", "Marketing Agent", "Operations Agent", "Knowledge Agent", "Escalation Agent"]
+    return {"metrics": counts, "records": rows,
+            "agents": [{"name": name, "status": "READY", "mode": "Registered tools"} for name in agent_names],
+            "settings": {"grok_enabled": bool(os.getenv("XAI_API_KEY")), "grok_model": os.getenv("XAI_MODEL", "grok-4.7"),
+                         "database": "PostgreSQL" if os.getenv("DATABASE_URL", "").startswith("postgres") else "SQLite"}}
+
+
+@app.post("/api/admin/access-requests/{request_id}/decision")
+def admin_access_request_decision(request_id: str, payload: AccessDecisionRequest, user=Depends(require_admin)):
+    from backend.database import engine, access_requests_table, audit_logs_table
+    decision = payload.decision.strip().upper()
+    if decision not in ("APPROVE", "REJECT"):
+        raise HTTPException(status_code=422, detail="Decision must be APPROVE or REJECT")
+    with engine.begin() as conn:
+        row = conn.execute(access_requests_table.select().where(access_requests_table.c.request_id == request_id)).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Access request not found")
+        if row["status"] != "PENDING_APPROVAL":
+            raise HTTPException(status_code=409, detail="Access request has already been reviewed")
+        status = "APPROVED" if decision == "APPROVE" else "REJECTED"
+        request_data = json.loads(row["payload"])
+        request_data.update({"status": status, "reviewed_by": user["name"], "review_notes": payload.notes[:500],
+                             "reviewed_at": datetime.now(timezone.utc).isoformat()})
+        conn.execute(access_requests_table.update().where(access_requests_table.c.request_id == request_id).values(
+            status=status, payload=json.dumps(request_data)))
+        conn.execute(audit_logs_table.insert().values(audit_id=f"AUD-{uuid4().hex[:14].upper()}",
+            timestamp=request_data["reviewed_at"], user_id=user["id"], agent="Admin Reviewer", tool="access_request_decision",
+            action=decision, entity_type="access_request", entity_id=request_id, status="SUCCESS",
+            result_summary=f"{status} least-privilege access request for {row['system_name']}"))
+    return request_data
+
+
+@app.post("/api/assistant")
+async def employee_assistant(payload: EmployeeAssistantRequest, user=Depends(require_employee)):
+    from backend.enterprise_assistant import handle_employee_message
+    return await handle_employee_message(user, payload.message, payload.department, payload.conversation_id)
+
+
+@app.get("/api/assistant/conversations/{conversation_id}")
+def employee_assistant_conversation(conversation_id: str, user=Depends(require_employee)):
+    from backend.enterprise_assistant import get_conversation
+    return get_conversation(user, conversation_id)
 
 
 @app.post("/api/refunds/create")

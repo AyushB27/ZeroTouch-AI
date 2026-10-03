@@ -5,6 +5,43 @@ function authHeaders(extra = {}) {
   return { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...extra };
 }
 
+// Demo credential map for transparent auto-relogin on 401
+const DEMO_TOKENS = {
+  'employee@zerotouch.demo': 'demo123',
+  'hr@zerotouch.demo': 'demo123',
+  'admin@zerotouch.demo': 'demo123',
+  'ayush.admin@zerotouch.demo': 'demo123',
+};
+
+async function reloginAndRetry(path, options) {
+  // Determine which demo user is currently stored
+  const storedEmail = localStorage.getItem('zerotouch_email') || 'employee@zerotouch.demo';
+  const password = DEMO_TOKENS[storedEmail] || 'demo123';
+  try {
+    const res = await fetch(`${BASE}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: storedEmail, password }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.token) {
+      localStorage.setItem('zerotouch_token', data.token);
+    }
+  } catch { /* silent — network error */ }
+  // Retry the original request with refreshed token
+  const res = await fetch(`${BASE}${path}`, {
+    ...options,
+    headers: authHeaders(options.headers || {}),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: `Request failed (${res.status})` }));
+    const error = new Error(err.detail || 'Request failed');
+    error.status = res.status;
+    throw error;
+  }
+  return res.json();
+}
+
 async function request(path, options = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), options.timeout || 8000);
@@ -16,8 +53,15 @@ async function request(path, options = {}) {
     });
     clearTimeout(timeoutId);
     if (!res.ok) {
+      // On 401, silently re-login with stored demo credentials and retry once
+      if (res.status === 401) {
+        clearTimeout(timeoutId);
+        return reloginAndRetry(path, options);
+      }
       const err = await res.json().catch(() => ({ detail: `Request failed (${res.status})` }));
-      throw new Error(err.detail || 'Request failed');
+      const error = new Error(err.detail || 'Request failed');
+      error.status = res.status;
+      throw error;
     }
     return res.json();
   } catch (err) {
@@ -28,6 +72,7 @@ async function request(path, options = {}) {
     throw err;
   }
 }
+
 
 export async function login(email, password) {
   const controller = new AbortController();
@@ -43,6 +88,7 @@ export async function login(email, password) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.detail || 'Sign in failed');
     localStorage.setItem('zerotouch_token', data.token);
+    localStorage.setItem('zerotouch_email', email);
     return data.user;
   } catch (err) {
     clearTimeout(timeoutId);
@@ -65,6 +111,14 @@ export const getCustomerRefunds = () => request('/customer/refunds');
 export const getCustomerMessages = () => request('/customer/messages');
 export const sendChat = message => request('/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }) });
 export const getAdminAuditLogs = () => request('/admin/audit-logs');
+export const getAdminEnterpriseOverview = () => request('/admin/enterprise-overview');
+export const decideAccessRequest = (requestId, decision, notes = '') => request(`/admin/access-requests/${encodeURIComponent(requestId)}/decision`, {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, notes }),
+});
+export const sendAssistantMessage = (message, department = 'all', conversationId = null) =>
+  request('/assistant', { method: 'POST', timeout: 45000, headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, department, conversation_id: conversationId }) });
+export const getAssistantConversation = conversationId => request(`/assistant/conversations/${encodeURIComponent(conversationId)}`);
 export const getOpsCases = () => request('/ops/cases');
 export const getOpsCase = identifier => request(`/ops/cases/${encodeURIComponent(identifier)}`);
 export const getEvaluationReport = () => request('/admin/evaluation', { timeout: 20000 });
@@ -134,6 +188,13 @@ export const executeWorkforceCommand = (command, role) =>
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ command, role }),
+  });
+export const getWorkforceBots = () => request('/workforce/bots');
+export const sendWorkforceChat = (message, domain, botId) =>
+  request('/workforce/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, domain, bot_id: botId }),
   });
 export const getWorkforceSkills = () => request('/workforce/skills');
 export const teachWorkforceSkill = (domain, taskName, actions, whyNote, owner) =>

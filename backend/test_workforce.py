@@ -22,14 +22,20 @@ from backend.planner import CommandBarPlanner
 from backend.academy import AcademyCoach
 
 
+from backend.database import init_db, db_reset_all
+
+
 @pytest.fixture(autouse=True)
 def reset_state():
+    init_db()
+    db_reset_all()
     reset_workforce_data()
     # Ensure kill switch is reset
     gov = AutonomyGovernor.get_state()
     if gov.kill_switch_active:
         AutonomyGovernor.toggle_kill_switch("Test Runner")
     yield
+    db_reset_all()
     reset_workforce_data()
 
 

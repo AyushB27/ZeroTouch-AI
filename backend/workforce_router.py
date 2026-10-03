@@ -69,6 +69,13 @@ class PublishRequest(BaseModel):
     approver: str = "Vikram Malhotra"
 
 
+class ChatRequest(BaseModel):
+    message: str
+    domain: str = "support"
+    bot_id: Optional[str] = None
+    case_id: Optional[str] = None
+
+
 class AcademySubmitRequest(BaseModel):
     joiner_id: str = "Kavita Rao"
     answers: List[int]
@@ -158,9 +165,10 @@ def run_task_agent(case_id: str, user=Depends(require_employee)):
         "provider": result["provider"], "fallback": result["fallback"],
         "tools_called": result["tools_called"],
     })
+    actor = user["name"] if isinstance(user, dict) else "Aarav Sharma"
     db_upsert_workforce_task(task)
     CURRENT_WORKFORCE_CASES[:] = tasks
-    return {"case": task, "agent_result": result, "requested_by": user["name"]}
+    return {"case": task, "agent_result": result, "requested_by": actor}
 
 @workforce_router.post("/tasks/{case_id}/approve")
 def approve_task(case_id: str, req: ApproveRequest = Body(...), user=Depends(require_employee)):
@@ -181,7 +189,7 @@ def approve_task(case_id: str, req: ApproveRequest = Body(...), user=Depends(req
     )
 
     now_iso = datetime.now(timezone.utc).isoformat()
-    actor = user["name"]
+    actor = user["name"] if isinstance(user, dict) else (getattr(req, "approver", None) or "Aarav Sharma")
     tx_id = task.get("evidence", {}).get("transaction_id") if isinstance(task.get("evidence"), dict) else None
 
     real_action_id = f"EXEC-{case_id[-6:]}-{now_iso[-6:]}"
@@ -391,7 +399,7 @@ def edit_task(case_id: str, req: EditRequest = Body(...), user=Depends(require_e
         raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
 
     now_iso = datetime.now(timezone.utc).isoformat()
-    actor = user["name"]
+    actor = user["name"] if isinstance(user, dict) else (getattr(req, "approver", None) or "Aarav Sharma")
     task["status"] = "EDITED"
     task["approver"] = actor
     task["edit_notes"] = req.edit_notes
@@ -424,7 +432,7 @@ def reject_task(case_id: str, req: RejectRequest = Body(...), user=Depends(requi
         raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
 
     now_iso = datetime.now(timezone.utc).isoformat()
-    actor = user["name"]
+    actor = user["name"] if isinstance(user, dict) else (getattr(req, "approver", None) or "Aarav Sharma")
     task["status"] = "REJECTED"
     task["approver"] = actor
     task["outcome"] = f"Rejected by {actor}: {req.rejection_reason}"
@@ -451,10 +459,24 @@ def execute_command(req: CommandRequest = Body(...), user=Depends(require_employ
     """Executes high-level natural language command with interactive multi-agent plan."""
     CURRENT_WORKFORCE_CASES.clear()
     CURRENT_WORKFORCE_CASES.extend(db_get_workforce_tasks())
-    result = run_bot_tool("support_bot", "support_command", command_text=req.command, user_role=user["name"])
+    actor_name = user["name"] if isinstance(user, dict) else (getattr(req, "role", "support_agent") or "support_agent")
+    result = run_bot_tool("support_bot", "support_command", command_text=req.command, user_role=actor_name)
     for task in CURRENT_WORKFORCE_CASES:
         db_upsert_workforce_task(task)
     return result
+
+
+@workforce_router.post("/chat")
+def chat_with_bot(req: ChatRequest = Body(...), user=Depends(require_employee)):
+    """Interactive AI chat bot with domain bot personas, xAI Grok integration, and resilient domain execution."""
+    actor_name = user["name"] if isinstance(user, dict) else "Employee"
+    from backend.grok_agent import chat_with_workflow_bot
+    return chat_with_workflow_bot(
+        message=req.message,
+        domain=req.domain,
+        bot_id=req.bot_id,
+        user_name=actor_name,
+    )
 
 
 # ── 4. Skill Studio (Interactive Teaching & Backtesting) ──────────────────────

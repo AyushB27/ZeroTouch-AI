@@ -1038,7 +1038,23 @@ export default function App() {
 
   useEffect(() => {
     if (!localStorage.getItem('zerotouch_token')) { setCheckingSession(false); return; }
-    getCurrentUser().then(setUser).catch(() => logout()).finally(() => setCheckingSession(false));
+    getCurrentUser()
+      .then(setUser)
+      .catch(async () => {
+        // Token may be a stale random token from before stable-token migration.
+        // Try to silently re-login with stored demo credentials.
+        const storedEmail = localStorage.getItem('zerotouch_email');
+        if (storedEmail) {
+          try {
+            const { login: apiLogin } = await import('./api');
+            const freshUser = await apiLogin(storedEmail, 'demo123');
+            setUser(freshUser);
+            return;
+          } catch { /* fall through */ }
+        }
+        logout();
+      })
+      .finally(() => setCheckingSession(false));
   }, []);
 
   const handleLogin = async () => setUser(await getCurrentUser());

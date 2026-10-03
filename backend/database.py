@@ -298,7 +298,9 @@ def _seed_department_directory():
             if not conn.execute(departments_table.select().where(departments_table.c.department_id == item["department_id"])).first():
                 conn.execute(departments_table.insert().values(**item))
         for employee_id, name, email, department_id in EMPLOYEE_NAMES:
-            if conn.execute(employees_table.select().where(employees_table.c.employee_id == employee_id)).first():
+            if conn.execute(employees_table.select().where(
+                (employees_table.c.employee_id == employee_id) | (employees_table.c.email == email)
+            )).first():
                 continue
             role = "Department Manager" if employee_id in {"emp-meera", "emp-nisha", "emp-dev", "emp-ishita", "emp-kabir", "emp-tara", "emp-rajesh"} else "Associate"
             status = "PREBOARDING" if employee_id == "emp-rahul" else "ACTIVE"
